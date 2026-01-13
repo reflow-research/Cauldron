@@ -1,0 +1,6 @@
+frostbite*.txt
+mapped_accounts.txt
+cauldron/rust_tools/target
+cauldron/rust_tools/.tmp
+gatekeeper/target/
+.tmp/

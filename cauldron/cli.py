@@ -38,7 +38,7 @@ vaddr_bits = 32
 profile = "finance-int"
 
 [abi]
-entry = 0
+entry = 0x4000
 control_offset = 0x0000
 control_size = 64
 input_offset = 0x1000
@@ -113,7 +113,7 @@ vaddr_bits = 32
 profile = "finance-int"
 
 [abi]
-entry = 0
+entry = 0x4000
 control_offset = 0x0000
 control_size = 64
 input_offset = 0x1000
@@ -190,7 +190,7 @@ vaddr_bits = 32
 profile = "finance-int"
 
 [abi]
-entry = 0
+entry = 0x4000
 control_offset = 0x0000
 control_size = 64
 input_offset = 0x1000
@@ -267,7 +267,7 @@ vaddr_bits = 32
 profile = "finance-int"
 
 [abi]
-entry = 0
+entry = 0x4000
 control_offset = 0x0000
 control_size = 64
 input_offset = 0x1000
@@ -344,7 +344,7 @@ vaddr_bits = 32
 profile = "finance-int"
 
 [abi]
-entry = 0
+entry = 0x4000
 control_offset = 0x0000
 control_size = 64
 input_offset = 0x1000
@@ -426,7 +426,7 @@ vaddr_bits = 32
 profile = "finance-int"
 
 [abi]
-entry = 0
+entry = 0x4000
 control_offset = 0x0000
 control_size = 64
 input_offset = 0x1000
@@ -511,7 +511,7 @@ vaddr_bits = 32
 profile = "finance-int"
 
 [abi]
-entry = 0
+entry = 0x4000
 control_offset = 0x0000
 control_size = 64
 input_offset = 0x1000
@@ -593,7 +593,7 @@ vaddr_bits = 32
 profile = "finance-int"
 
 [abi]
-entry = 0
+entry = 0x4000
 control_offset = 0x0000
 control_size = 64
 input_offset = 0x1000
@@ -676,7 +676,7 @@ vaddr_bits = 32
 profile = "finance-int"
 
 [abi]
-entry = 0
+entry = 0x4000
 control_offset = 0x0000
 control_size = 64
 input_offset = 0x1000
@@ -751,7 +751,7 @@ vaddr_bits = 32
 profile = "finance-int"
 
 [abi]
-entry = 0
+entry = 0x4000
 control_offset = 0x0000
 control_size = 64
 input_offset = 0x1000
@@ -800,7 +800,7 @@ vaddr_bits = 32
 profile = "finance-int"
 
 [abi]
-entry = 0
+entry = 0x4000
 control_offset = 0x0000
 control_size = 64
 input_offset = 0x1000
@@ -2164,7 +2164,6 @@ def _cmd_program_load(args: argparse.Namespace) -> int:
         "--vm",
         info["vm_pubkey"],
         "--load",
-        "--load-only",
     ]
 
     if args.rpc_url:
@@ -2220,7 +2219,7 @@ def _cmd_invoke(args: argparse.Namespace) -> int:
     run_onchain = _resolve_run_onchain()
     cmd = [run_onchain]
     if args.program_path:
-        cmd.append(args.program_path)
+        cmd.extend([args.program_path, "--load"])
     cmd.extend(
         [
             "--vm",

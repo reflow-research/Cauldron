@@ -23,8 +23,9 @@ pub unsafe extern "C" fn _start() -> ! {
     // Stack pointer configured via config.rs
     core::arch::naked_asm!(
         "li sp, {stack_ptr}",
-        "j rust_main",
+        "j {rust_main}",
         stack_ptr = const STACK_PTR,
+        rust_main = sym rust_main,
     );
 }
 
@@ -136,22 +137,22 @@ fn vaddr(segment: u32, offset: usize) -> u64 {
 
 #[inline(always)]
 unsafe fn read_u8(addr: u64) -> u8 {
-    (addr as *const u8).read_unaligned()
+    (addr as *const u8).read_volatile()
 }
 
 #[inline(always)]
 unsafe fn read_i8(addr: u64) -> i8 {
-    (addr as *const i8).read_unaligned()
+    (addr as *const i8).read_volatile()
 }
 
 #[inline(always)]
 unsafe fn read_u16(addr: u64) -> u16 {
-    (addr as *const u16).read_unaligned()
+    (addr as *const u16).read_volatile()
 }
 
 #[inline(always)]
 unsafe fn read_u32(addr: u64) -> u32 {
-    (addr as *const u32).read_unaligned()
+    (addr as *const u32).read_volatile()
 }
 
 #[inline(always)]
@@ -161,7 +162,7 @@ unsafe fn read_i32(addr: u64) -> i32 {
 
 #[inline(always)]
 unsafe fn write_u32(addr: u64, value: u32) {
-    (addr as *mut u32).write_unaligned(value);
+    (addr as *mut u32).write_volatile(value);
 }
 
 #[inline(always)]

@@ -23,8 +23,9 @@ pub unsafe extern "C" fn _start() -> ! {
     // Stack pointer configured via config.rs
     core::arch::naked_asm!(
         "li sp, {stack_ptr}",
-        "j rust_main",
+        "j {rust_main}",
         stack_ptr = const STACK_PTR,
+        rust_main = sym rust_main,
     );
 }
 
@@ -101,27 +102,27 @@ fn scratch_addr(offset: usize) -> u64 {
 
 #[inline(always)]
 unsafe fn read_u8(addr: u64) -> u8 {
-    (addr as *const u8).read_unaligned()
+    (addr as *const u8).read_volatile()
 }
 
 #[inline(always)]
 unsafe fn read_u16(addr: u64) -> u16 {
-    (addr as *const u16).read_unaligned()
+    (addr as *const u16).read_volatile()
 }
 
 #[inline(always)]
 unsafe fn read_u32(addr: u64) -> u32 {
-    (addr as *const u32).read_unaligned()
+    (addr as *const u32).read_volatile()
 }
 
 #[inline(always)]
 unsafe fn write_u32(addr: u64, value: u32) {
-    (addr as *mut u32).write_unaligned(value);
+    (addr as *mut u32).write_volatile(value);
 }
 
 #[inline(always)]
 unsafe fn write_u8(addr: u64, value: u8) {
-    (addr as *mut u8).write_unaligned(value);
+    (addr as *mut u8).write_volatile(value);
 }
 
 #[inline(always)]
@@ -237,7 +238,7 @@ pub extern "C" fn rust_main() -> ! {
         let mut i = 0usize;
         while i < INPUT_BLOB_SIZE {
             let b = (payload_ptr + i as u64) as *const u8;
-            sum = sum.wrapping_add(unsafe { b.read_unaligned() } as u32);
+            sum = sum.wrapping_add(unsafe { b.read_volatile() } as u32);
             i += 1;
         }
 

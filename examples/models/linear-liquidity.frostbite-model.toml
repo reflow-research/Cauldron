@@ -8,7 +8,7 @@ vaddr_bits = 32
 profile = "finance-int"
 
 [abi]
-entry = 0
+entry = 0x4000
 control_offset = 0x0000
 control_size = 64
 input_offset = 0x1000
