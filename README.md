@@ -199,6 +199,9 @@ example in `sdk/js/run_gatekeeper.js`. See
 - `docs/FROSTBITE_GUEST_CONTRACT.md`
 - `examples/models/`
 
+When installed via pip, the same files are bundled under
+`cauldron/docs/` and `cauldron/examples/` inside site-packages.
+
 ## Input payloads
 
 For vector/time_series, `input.json` can be a list or nested list.

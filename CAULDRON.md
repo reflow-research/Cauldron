@@ -107,6 +107,9 @@ See `gatekeeper/README.md` for build/deploy steps.
 - `docs/FROSTBITE_GUEST_CONTRACT.md`
 - `examples/models/`
 
+When installed via pip, the same files are bundled under
+`cauldron/docs/` and `cauldron/examples/` inside site-packages.
+
 ## Input payload formats
 
 Vector/time_series payloads can be lists or nested lists.

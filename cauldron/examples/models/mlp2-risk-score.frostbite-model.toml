@@ -1,0 +1,79 @@
+[model]
+id = "mlp2-risk-score"
+version = "0.1.0"
+abi_version = "fb-abi-1"
+arch = "rv64imac"
+endianness = "little"
+vaddr_bits = 32
+profile = "finance-int"
+
+[abi]
+entry = 0x4000
+control_offset = 0x0000
+control_size = 64
+input_offset = 0x1000
+input_max = 4096
+output_offset = 0x2000
+output_max = 256
+scratch_min = 262144
+alignment = 8
+reserved_tail = 32
+
+[schema]
+type = "vector"
+
+[schema.vector]
+input_dtype = "i32"
+input_shape = [64]
+output_dtype = "i32"
+output_shape = [1]
+
+[validation]
+mode = "minimal"
+
+[build]
+hidden_dim1 = 32
+hidden_dim2 = 16
+hidden_offset1 = 0x3000
+hidden_offset2 = 0x3080
+has_bias = true
+stack_guard = 16384
+
+[weights]
+layout = "mlp2_i8_q16_v1"
+quantization = "q8"
+dtype = "i8"
+scale = "q16"
+header_format = "none"
+
+[weights.scales]
+w1_scale_q16 = 65536
+w2_scale_q16 = 65536
+w3_scale_q16 = 65536
+
+[[weights.blobs]]
+name = "main"
+file = "weights.bin"
+hash = "sha256:REPLACE_ME"
+# Layout: W1 (i8 H1 x I) + B1 (i32 H1) + W2 (i8 H2 x H1) + B2 (i32 H2)
+#         + W3 (i8 O x H2) + B3 (i32 O)
+size_bytes = 2772
+chunk_size = 9500000
+data_offset = 0
+segment_index = 1
+
+[[segments]]
+index = 0
+kind = "scratch"
+access = "rw"
+source = "scratch"
+
+[[segments]]
+index = 1
+kind = "weights"
+access = "ro"
+source = "weights:main"
+
+[limits]
+max_instructions = 1000000
+cu_budget = 1400000

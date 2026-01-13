@@ -3,6 +3,8 @@ include CAULDRON.md
 include .env.example
 
 recursive-include cauldron/bin *
+recursive-include cauldron/docs *
+recursive-include cauldron/examples *
 recursive-include cauldron/toolchain/bin *
 recursive-include cauldron/templates *
 recursive-include cauldron/toolchain *
