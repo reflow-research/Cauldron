@@ -17,6 +17,12 @@ cauldron chunk --manifest frostbite-model.toml
 cauldron upload --all "weights_chunk*.bin" --cluster localnet
 ```
 
+## Running examples (localnet)
+
+See `docs/RUNNING_EXAMPLES.md` for a full localnet walkthrough (weights, guest
+build, on-chain invoke). Keep `abi.entry >= 0x4000` so guest code does not
+overwrite the VM header/control block.
+
 ## Common flows
 
 ### Linear / Softmax / Naive Bayes / MLP
@@ -80,7 +86,7 @@ classes so the training harness matches the manifest dimensions.
 - `cauldron accounts init --manifest frostbite-model.toml --ram-count 1`
 - `cauldron accounts show --accounts frostbite-accounts.toml`
 - `cauldron accounts create --accounts frostbite-accounts.toml`
-- `cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/guest`
+- `cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest`
 - `cauldron invoke --accounts frostbite-accounts.toml --instructions 50000`
 
 ## Optional deps
@@ -181,8 +187,13 @@ After `accounts init`, fill in the VM/weights/RAM keypairs in
 `frostbite-accounts.toml` (or pass `--vm-keypair`/`--weights-keypair`/
 `--ram-keypair`) before creating accounts or uploading.
 You also need a VM account initialized by the Frostbite program (for example,
-run `frostbite-run-onchain guest.elf --vm-save frostbite_vm_accounts.txt` once
-to create the VM, then copy the pubkey into the accounts file).
+run the following once to create the VM, then copy the pubkey into the accounts
+file):
+
+```
+frostbite-run-onchain guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest \
+  --vm-save frostbite_vm_accounts.txt
+```
 
 ```
 # 1) Create accounts file + VM account
@@ -196,7 +207,7 @@ cauldron upload --file weights.bin --accounts frostbite-accounts.toml
 cauldron accounts create --accounts frostbite-accounts.toml
 
 # 4) Preload program
-cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/guest
+cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest
 
 # 5) Stage input + invoke
 cauldron input-write --manifest frostbite-model.toml --accounts frostbite-accounts.toml --data input.json

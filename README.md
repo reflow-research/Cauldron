@@ -26,7 +26,7 @@ python -m cauldron.cli validate path/to/frostbite-model.toml
 - `cauldron accounts init --manifest <manifest> --ram-count 1`
 - `cauldron accounts show --accounts frostbite-accounts.toml`
 - `cauldron accounts create --accounts frostbite-accounts.toml`
-- `cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/guest`
+- `cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest`
 - `cauldron invoke --accounts frostbite-accounts.toml`
 - `cauldron schema-hash --manifest <manifest> [--update-manifest]`
 - `cauldron input --manifest <manifest> --data input.json [--header]`
@@ -221,15 +221,20 @@ After `accounts init`, fill in the VM/weights/RAM keypairs in
 `frostbite-accounts.toml` (or pass `--vm-keypair`/`--weights-keypair`/
 `--ram-keypair`) before creating accounts or uploading.
 You also need a VM account initialized by the Frostbite program (for example,
-run `frostbite-run-onchain guest.elf --vm-save frostbite_vm_accounts.txt` once
-to create the VM, then copy the pubkey into the accounts file).
+run the following once to create the VM, then copy the pubkey into the accounts
+file):
+
+```
+frostbite-run-onchain guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest \
+  --vm-save frostbite_vm_accounts.txt
+```
 
 ```
 cauldron accounts init --manifest frostbite-model.toml --ram-count 1
 # (fill keypairs + VM pubkey in frostbite-accounts.toml)
 cauldron upload --file weights.bin --accounts frostbite-accounts.toml
 cauldron accounts create --accounts frostbite-accounts.toml
-cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/guest
+cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest
 cauldron input-write --manifest frostbite-model.toml --accounts frostbite-accounts.toml --data input.json
 cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 50000
 cauldron output --manifest frostbite-model.toml --accounts frostbite-accounts.toml
@@ -243,7 +248,7 @@ cauldron input-write --manifest frostbite-model.toml \
 
 To preload the guest program into an existing VM and skip execution:
 ```
-cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/guest
+cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest
 ```
 
 For low-latency invocation (assumes program + input already staged):
