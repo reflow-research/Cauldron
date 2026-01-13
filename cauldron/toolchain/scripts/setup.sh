@@ -57,6 +57,33 @@ TOOLCHAIN_DIR="$(dirname "$SCRIPT_DIR")"
 PROJECT_DIR="$(dirname "$TOOLCHAIN_DIR")"
 BIN_DIR="$TOOLCHAIN_DIR/bin"
 
+platform_bin_dir() {
+    local system machine tag
+    system="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    machine="$(uname -m | tr '[:upper:]' '[:lower:]')"
+    tag=""
+    if [ "$system" = "darwin" ]; then
+        if [ "$machine" = "arm64" ] || [ "$machine" = "aarch64" ]; then
+            tag="darwin-arm64"
+        elif [ "$machine" = "x86_64" ] || [ "$machine" = "amd64" ]; then
+            tag="darwin-x64"
+        fi
+    elif [ "$system" = "linux" ]; then
+        if [ "$machine" = "x86_64" ] || [ "$machine" = "amd64" ]; then
+            tag="linux-x64"
+        elif [ "$machine" = "arm64" ] || [ "$machine" = "aarch64" ]; then
+            tag="linux-arm64"
+        fi
+    fi
+    if [ -n "$tag" ] && [ -d "$TOOLCHAIN_DIR/bin/$tag" ]; then
+        echo "$TOOLCHAIN_DIR/bin/$tag"
+        return 0
+    fi
+    echo "$TOOLCHAIN_DIR/bin"
+}
+
+BIN_DIR="$(platform_bin_dir)"
+
 echo "Frostbite Toolchain Setup"
 echo "========================="
 echo ""

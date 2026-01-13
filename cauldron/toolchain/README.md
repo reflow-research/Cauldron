@@ -4,7 +4,9 @@ This directory is self-contained: it includes the C headers, linker script, CRT,
 You can copy `toolchain/` into another repo and use it without the full Frostbite codebase.
 
 To run programs, you need `frostbite-run` and `frostbite-run-onchain` on your `PATH`.
-You can place them in `toolchain/bin` and `setup.sh` will add that to `PATH`.
+You can place them in `toolchain/bin/<platform>` (for example, `linux-x64` or
+`darwin-arm64`), and `setup.sh` will add the matching directory to `PATH`
+(falling back to `toolchain/bin`).
 
 The VM supports native float and double instructions (RV64IMFD). `fb-cc` targets
 `rv64imfd` by default so regular floating-point math works without soft-float.
