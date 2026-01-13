@@ -1,0 +1,12 @@
+[package]
+name = "frostbite-guest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+frostbite-sdk = { path = "../toolchain/rust/frostbite-sdk" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"

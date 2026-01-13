@@ -1,0 +1,13 @@
+include README.md
+include CAULDRON.md
+include .env.example
+
+recursive-include cauldron/bin *
+recursive-include cauldron/toolchain/bin *
+recursive-include cauldron/templates *
+recursive-include cauldron/toolchain *
+recursive-include cauldron/rust_tools *
+
+recursive-include docs *
+recursive-include examples *
+recursive-include scripts *

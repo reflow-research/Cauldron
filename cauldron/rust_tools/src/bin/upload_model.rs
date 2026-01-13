@@ -1,0 +1,320 @@
+use futures::stream::{FuturesUnordered, StreamExt};
+use solana_client::nonblocking::rpc_client::RpcClient;
+use solana_sdk::{
+    commitment_config::CommitmentConfig,
+    instruction::{AccountMeta, Instruction},
+    pubkey::Pubkey,
+    signature::{Keypair, Signer},
+    system_instruction,
+    transaction::Transaction,
+};
+use std::env;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
+
+const DEFAULT_SOLANA_CONFIG: &str = "~/.config/solana/cli/config.yml";
+const DEFAULT_RPC_URL: &str = "http://127.0.0.1:8899";
+const DEFAULT_PAYER_KEYPAIR: &str = "~/.config/solana/id.json";
+const DEFAULT_PROGRAM_ID: &str = "FRsToriMLgDc1Ud53ngzHUZvCRoazCaGeGUuzkwoha7m";
+const CHUNK_SIZE: usize = 900;
+const CONCURRENCY: usize = 100;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("--- Frostbite Parallel Model Upload ---");
+
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        println!("Usage: cargo run --bin upload_model -- <chunk_file_path>");
+        return Ok(());
+    }
+    let chunk_path = expand_path(&args[1]);
+
+    let solana_config_path =
+        env::var("SOLANA_CONFIG").unwrap_or_else(|_| DEFAULT_SOLANA_CONFIG.to_string());
+    let cli_config = load_solana_cli_config(&solana_config_path);
+    let rpc_url = env::var("FROSTBITE_RPC_URL")
+        .ok()
+        .or_else(|| cli_config.as_ref().and_then(|cfg| cfg.rpc_url.clone()))
+        .unwrap_or_else(|| DEFAULT_RPC_URL.to_string());
+    let payer_keypair_path = env::var("FROSTBITE_PAYER_KEYPAIR")
+        .ok()
+        .or_else(|| cli_config.as_ref().and_then(|cfg| cfg.keypair_path.clone()))
+        .unwrap_or_else(|| DEFAULT_PAYER_KEYPAIR.to_string());
+    let payer_keypair_path = expand_path(&payer_keypair_path);
+
+    // 1. Setup
+    let client = Arc::new(RpcClient::new_with_commitment(
+        rpc_url.clone(),
+        CommitmentConfig::confirmed(),
+    ));
+    let payer = Arc::new(
+        solana_sdk::signature::read_keypair_file(&payer_keypair_path)
+            .map_err(|_| format!("Could not find payer keypair at {}", payer_keypair_path))?,
+    );
+
+    println!("RPC: {}", rpc_url);
+    println!("Payer keypair: {}", payer_keypair_path);
+
+    let frostbite_id = detect_program_id()?;
+
+    // 2. Load File
+    let data = tokio::fs::read(&chunk_path).await?;
+    let file_len = data.len();
+    println!("File size: {} bytes", file_len);
+
+    // 3. Chunk Account
+    let chunk_kp_path = env::var("FROSTBITE_CHUNK_KEYPAIR")
+        .or_else(|_| env::var("FROSTBITE_WEIGHTS_KEYPAIR"))
+        .unwrap_or_else(|_| format!("{}.json", chunk_path));
+    let chunk_kp = if Path::new(&chunk_kp_path).exists() {
+        solana_sdk::signature::read_keypair_file(&chunk_kp_path)?
+    } else {
+        let kp = Keypair::new();
+        solana_sdk::signature::write_keypair_file(&kp, &chunk_kp_path)?;
+        kp
+    };
+    let chunk_pubkey = chunk_kp.pubkey();
+    println!("Target Account: {}", chunk_pubkey);
+
+    // 4. Create/Init Account if missing
+    if client.get_account(&chunk_pubkey).await.is_err() {
+        let account_size = file_len + 12;
+        println!("Creating Account ({} bytes)...", account_size);
+
+        let rent = client
+            .get_minimum_balance_for_rent_exemption(account_size)
+            .await?;
+
+        let create_ix = system_instruction::create_account(
+            &payer.pubkey(),
+            &chunk_pubkey,
+            rent,
+            account_size as u64,
+            &frostbite_id,
+        );
+        // Write binary header: MAGIC(4) + LEN(4) + RESERVED(4)
+        let mut init_data = Vec::with_capacity(1 + 4 + 12);
+        init_data.push(5); // write_account opcode
+        init_data.extend_from_slice(&0u32.to_le_bytes()); // offset = 0
+        init_data.extend_from_slice(b"RVCD"); // BINARY_MAGIC
+        init_data.extend_from_slice(&(file_len as u32).to_le_bytes()); // length
+        init_data.extend_from_slice(&0u32.to_le_bytes()); // reserved
+        let init_ix = Instruction {
+            program_id: frostbite_id,
+            accounts: vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(chunk_pubkey, false),
+            ],
+            data: init_data,
+        };
+
+        let tx = Transaction::new_signed_with_payer(
+            &[create_ix, init_ix],
+            Some(&payer.pubkey()),
+            &[&payer.as_ref(), &chunk_kp],
+            client.get_latest_blockhash().await?,
+        );
+        client.send_and_confirm_transaction(&tx).await?;
+        println!("Account initialized.");
+    }
+
+    // 5. Blast & Repair Loop
+    let semaphore = Arc::new(Semaphore::new(CONCURRENCY));
+    let data_ref = Arc::new(data);
+
+    loop {
+        // Read on-chain data to find missing/mismatch chunks
+        println!("Verifying on-chain state...");
+        let acc = client.get_account(&chunk_pubkey).await?;
+        if acc.data.len() < 12 + data_ref.len() {
+            return Err("Account size mismatch".into());
+        }
+
+        // Identify bad chunks
+        // Account data: [MAGIC:4][LEN:4][RES:4][DATA...]
+        // File data maps to [DATA...] which starts at offset 12
+        let on_chain_data = &acc.data[12..12 + data_ref.len()];
+
+        let mut dirty_chunks = Vec::new();
+        let total_chunks = (data_ref.len() + CHUNK_SIZE - 1) / CHUNK_SIZE;
+
+        for i in 0..total_chunks {
+            let start = i * CHUNK_SIZE;
+            let end = std::cmp::min(start + CHUNK_SIZE, data_ref.len());
+            let file_slice = &data_ref[start..end];
+            let on_chain_slice = &on_chain_data[start..end];
+
+            if file_slice != on_chain_slice {
+                dirty_chunks.push(i);
+            }
+        }
+
+        if dirty_chunks.is_empty() {
+            println!(
+                "SUCCESS: Integrity Verified. All {} chunks match.",
+                total_chunks
+            );
+            break;
+        }
+
+        println!(
+            "Uploading {}/{} dirty chunks...",
+            dirty_chunks.len(),
+            total_chunks
+        );
+
+        let mut futures = FuturesUnordered::new();
+
+        for chunk_idx in dirty_chunks {
+            let permit = semaphore.clone().acquire_owned().await?;
+            let client = client.clone();
+            let payer = payer.clone();
+            let data = data_ref.clone();
+
+            futures.push(tokio::spawn(async move {
+                let start = chunk_idx * CHUNK_SIZE;
+                let end = std::cmp::min(start + CHUNK_SIZE, data.len());
+                let chunk_data = &data[start..end];
+
+                let mut ix_data = Vec::with_capacity(5 + chunk_data.len());
+                ix_data.push(5); // write_account opcode
+                                 // Offset is start + 12 (skip binary header)
+                ix_data.extend_from_slice(&((start + 12) as u32).to_le_bytes());
+                ix_data.extend_from_slice(chunk_data);
+
+                let ix = Instruction {
+                    program_id: frostbite_id,
+                    accounts: vec![
+                        AccountMeta::new(payer.pubkey(), true),
+                        AccountMeta::new(chunk_pubkey, false),
+                    ],
+                    data: ix_data,
+                };
+
+                let bh = client.get_latest_blockhash().await.unwrap_or_default();
+                let tx = Transaction::new_signed_with_payer(
+                    &[ix],
+                    Some(&payer.pubkey()),
+                    &[&payer.as_ref()],
+                    bh,
+                );
+
+                let res = client.send_and_confirm_transaction(&tx).await;
+                drop(permit);
+                res
+            }));
+        }
+
+        while let Some(res) = futures.next().await {
+            match res {
+                Ok(Ok(_)) => print!("."),
+                Ok(Err(_)) => print!("x"),
+                Err(_) => print!("!"),
+            }
+            use std::io::Write;
+            std::io::stdout().flush().ok();
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+fn detect_program_id() -> Result<Pubkey, Box<dyn std::error::Error>> {
+    if let Ok(id) = env::var("FROSTBITE_PROGRAM_ID") {
+        return Ok(Pubkey::from_str(&id)?);
+    }
+    if let Ok(path) = env::var("FROSTBITE_PROGRAM_KEYPAIR") {
+        return Ok(read_program_keypair(&path)?);
+    }
+    if let Some(path) = find_program_keypair() {
+        return Ok(read_program_keypair(path.to_str().unwrap_or_default())?);
+    }
+    Ok(Pubkey::from_str(DEFAULT_PROGRAM_ID)?)
+}
+
+fn read_program_keypair(path: &str) -> Result<Pubkey, Box<dyn std::error::Error>> {
+    let data = std::fs::read_to_string(path)?;
+    let bytes: Vec<u8> = serde_json::from_str(&data)?;
+    let keypair = Keypair::from_bytes(&bytes)?;
+    Ok(keypair.pubkey())
+}
+
+fn find_program_keypair() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(home) = env::var("FROSTBITE_HOME") {
+        candidates.push(PathBuf::from(format!(
+            "{}/target/deploy/frostbite-keypair.json",
+            home.trim_end_matches('/')
+        )));
+    }
+
+    if let Ok(cwd) = env::current_dir() {
+        for rel in [
+            "target/deploy/frostbite-keypair.json",
+            "../target/deploy/frostbite-keypair.json",
+            "../../target/deploy/frostbite-keypair.json",
+            "../../../target/deploy/frostbite-keypair.json",
+        ] {
+            candidates.push(cwd.join(rel));
+        }
+    }
+
+    for path in candidates {
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+#[derive(Default)]
+struct CliConfig {
+    rpc_url: Option<String>,
+    keypair_path: Option<String>,
+}
+
+fn load_solana_cli_config(path: &str) -> Option<CliConfig> {
+    let path = expand_path(path);
+    let contents = std::fs::read_to_string(&path).ok()?;
+    let mut cfg = CliConfig::default();
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(value) = parse_yaml_value(line, "json_rpc_url") {
+            cfg.rpc_url = Some(value);
+            continue;
+        }
+        if let Some(value) = parse_yaml_value(line, "keypair_path") {
+            cfg.keypair_path = Some(value);
+        }
+    }
+    Some(cfg)
+}
+
+fn parse_yaml_value(line: &str, key: &str) -> Option<String> {
+    let mut parts = line.splitn(2, ':');
+    let left = parts.next()?.trim();
+    if left != key {
+        return None;
+    }
+    let value = parts.next()?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.trim_matches('"').trim_matches('\'').to_string())
+}
+
+fn expand_path(path: &str) -> String {
+    if let Some(stripped) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return format!("{}/{}", home, stripped);
+        }
+    }
+    path.to_string()
+}

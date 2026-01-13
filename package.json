@@ -1,0 +1,18 @@
+{
+  "name": "cauldron-modelkit",
+  "version": "0.2.0",
+  "description": "Frostbite Cauldron modelkit (CLI + SDK)",
+  "license": "UNLICENSED",
+  "scripts": {
+    "postinstall": "node scripts/select-runner.js --copy"
+  },
+  "files": [
+    "cauldron/**",
+    "docs/**",
+    "examples/**",
+    "scripts/**",
+    "README.md",
+    "CAULDRON.md",
+    ".env.example"
+  ]
+}

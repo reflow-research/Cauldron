@@ -1,0 +1,78 @@
+[model]
+id = "cnn1d-signal-score"
+version = "0.1.0"
+abi_version = "fb-abi-1"
+arch = "rv64imac"
+endianness = "little"
+vaddr_bits = 32
+profile = "finance-int"
+
+[abi]
+entry = 0
+control_offset = 0x0000
+control_size = 64
+input_offset = 0x1000
+input_max = 4096
+output_offset = 0x2000
+output_max = 256
+scratch_min = 262144
+alignment = 8
+reserved_tail = 32
+
+[schema]
+type = "time_series"
+
+[schema.time_series]
+input_dtype = "i32"
+window = 32
+features = 4
+output_dtype = "i32"
+output_shape = [1]
+
+[validation]
+mode = "minimal"
+
+[build]
+kernel_size = 3
+stride = 1
+out_channels = 8
+conv_offset = 0x3000
+has_bias = true
+stack_guard = 16384
+
+[weights]
+layout = "cnn1d_i8_q16_v1"
+quantization = "q8"
+dtype = "i8"
+scale = "q16"
+header_format = "none"
+
+[weights.scales]
+w1_scale_q16 = 65536
+w2_scale_q16 = 65536
+
+[[weights.blobs]]
+name = "main"
+file = "weights.bin"
+hash = "sha256:REPLACE_ME"
+# Layout: W1 (i8 F x C x K) + B1 (i32 F) + W2 (i8 O x F) + B2 (i32 O)
+size_bytes = 140
+chunk_size = 9500000
+data_offset = 0
+segment_index = 1
+
+[[segments]]
+index = 0
+kind = "scratch"
+access = "rw"
+source = "scratch"
+
+[[segments]]
+index = 1
+kind = "weights"
+access = "ro"
+source = "weights:main"
+
+[limits]
+max_instructions = 1000000
+cu_budget = 1400000

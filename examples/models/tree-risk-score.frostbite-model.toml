@@ -1,0 +1,71 @@
+[model]
+id = "tree-risk-score"
+version = "0.1.0"
+abi_version = "fb-abi-1"
+arch = "rv64imac"
+endianness = "little"
+vaddr_bits = 32
+profile = "finance-int"
+
+[abi]
+entry = 0
+control_offset = 0x0000
+control_size = 64
+input_offset = 0x1000
+input_max = 4096
+output_offset = 0x2000
+output_max = 256
+scratch_min = 262144
+alignment = 8
+reserved_tail = 32
+
+[schema]
+type = "vector"
+
+[schema.vector]
+input_dtype = "i32"
+input_shape = [64]
+output_dtype = "i32"
+output_shape = [1]
+
+[validation]
+mode = "minimal"
+
+[build]
+tree_count = 1
+tree_node_count = 15
+tree_stride = 300
+stack_guard = 16384
+
+[weights]
+layout = "tree_q16_v1"
+quantization = "custom"
+dtype = "i32"
+scale = "q16"
+header_format = "none"
+
+[[weights.blobs]]
+name = "main"
+file = "weights.bin"
+hash = "sha256:REPLACE_ME"
+# Layout: nodes packed as i32 (feature, threshold_q16, left, right, value_q16)
+size_bytes = 300
+chunk_size = 9500000
+data_offset = 0
+segment_index = 1
+
+[[segments]]
+index = 0
+kind = "scratch"
+access = "rw"
+source = "scratch"
+
+[[segments]]
+index = 1
+kind = "weights"
+access = "ro"
+source = "weights:main"
+
+[limits]
+max_instructions = 1000000
+cu_budget = 1400000

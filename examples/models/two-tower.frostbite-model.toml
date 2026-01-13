@@ -1,0 +1,78 @@
+[model]
+id = "two-tower"
+version = "0.1.0"
+abi_version = "fb-abi-1"
+arch = "rv64imac"
+endianness = "little"
+vaddr_bits = 32
+profile = "finance-int"
+
+[abi]
+entry = 0
+control_offset = 0x0000
+control_size = 64
+input_offset = 0x1000
+input_max = 4096
+output_offset = 0x2000
+output_max = 256
+scratch_min = 262144
+alignment = 8
+reserved_tail = 32
+
+[schema]
+type = "vector"
+
+[schema.vector]
+input_dtype = "i32"
+input_shape = [128]
+output_dtype = "i32"
+output_shape = [1]
+
+[validation]
+mode = "minimal"
+
+[build]
+tower_input_a = 64
+tower_input_b = 64
+embed_dim = 16
+embed_offset = 0x3000
+dot_shift = 16
+has_bias = true
+stack_guard = 16384
+
+[weights]
+layout = "two_tower_i8_q16_v1"
+quantization = "q8"
+dtype = "i8"
+scale = "q16"
+header_format = "none"
+
+[weights.scales]
+w1_scale_q16 = 65536
+w2_scale_q16 = 65536
+
+[[weights.blobs]]
+name = "main"
+file = "weights.bin"
+hash = "sha256:REPLACE_ME"
+# Layout: W1 (i8 E x A) + B1 (i32 E) + W2 (i8 E x B) + B2 (i32 E)
+size_bytes = 2176
+chunk_size = 9500000
+data_offset = 0
+segment_index = 1
+
+[[segments]]
+index = 0
+kind = "scratch"
+access = "rw"
+source = "scratch"
+
+[[segments]]
+index = 1
+kind = "weights"
+access = "ro"
+source = "weights:main"
+
+[limits]
+max_instructions = 1000000
+cu_budget = 1400000

@@ -1,0 +1,227 @@
+#!/bin/bash
+# fb-cc - Frostbite C/C++ Compiler
+#
+# Compiles C/C++ source files to ELF executables for the Frostbite RISC-V VM.
+#
+# Usage:
+#   fb-cc source.c -o program.elf
+#   fb-cc source1.c source2.c -o program.elf
+#   fb-cc -S source.c -o source.s     # Assembly output
+#   fb-cc -c source.c -o source.o     # Object file only
+#
+# Environment:
+#   FROSTBITE_TOOLCHAIN - Path to toolchain directory (auto-detected if not set)
+
+set -e
+
+# Find toolchain directory
+if [ -z "$FROSTBITE_TOOLCHAIN" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    FROSTBITE_TOOLCHAIN="$(dirname "$SCRIPT_DIR")"
+fi
+
+INCLUDE_DIR="$FROSTBITE_TOOLCHAIN/include"
+LIB_DIR="$FROSTBITE_TOOLCHAIN/lib"
+LINKER_SCRIPT="$LIB_DIR/frostbite.ld"
+CRT0="$LIB_DIR/crt0.c"
+ALLOC="$LIB_DIR/frostbite_alloc.c"
+SOFTFLOAT="$LIB_DIR/frostbite_softfloat.c"
+BUILTINS_LIB="$LIB_DIR/libfrostbite_builtins.a"
+
+build_builtins_lib() {
+    if [ ! -f "$SOFTFLOAT" ]; then
+        return
+    fi
+    if [ ! -f "$BUILTINS_LIB" ] || [ "$SOFTFLOAT" -nt "$BUILTINS_LIB" ]; then
+        [ $VERBOSE -eq 1 ] && echo "Building builtins library..."
+        clang $CFLAGS -c "$SOFTFLOAT" -o "$TMPDIR/frostbite_softfloat.o" 2>&1 | grep -v "warning:" || true
+        ar rcs "$BUILTINS_LIB" "$TMPDIR/frostbite_softfloat.o"
+    fi
+}
+
+# Check for required files
+if [ ! -f "$LINKER_SCRIPT" ]; then
+    echo "Error: Linker script not found: $LINKER_SCRIPT"
+    echo "Set FROSTBITE_TOOLCHAIN or run from the toolchain directory"
+    exit 1
+fi
+
+# Parse arguments
+OUTPUT=""
+SOURCES=()
+COMPILE_ONLY=0
+ASM_ONLY=0
+EXTRA_FLAGS=()
+VERBOSE=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o)
+            OUTPUT="$2"
+            shift 2
+            ;;
+        -c)
+            COMPILE_ONLY=1
+            shift
+            ;;
+        -S)
+            ASM_ONLY=1
+            shift
+            ;;
+        -v|--verbose)
+            VERBOSE=1
+            shift
+            ;;
+        -h|--help)
+            echo "fb-cc - Frostbite C/C++ Compiler"
+            echo ""
+            echo "Usage: fb-cc [options] source.c ... -o output"
+            echo ""
+            echo "Options:"
+            echo "  -o FILE    Output file"
+            echo "  -c         Compile only (produce .o files)"
+            echo "  -S         Produce assembly output"
+            echo "  -v         Verbose output"
+            echo "  -I DIR     Add include directory"
+            echo "  -O0/1/2/3  Optimization level (default: -O2)"
+            echo "  -g         Include debug symbols"
+            echo "  -h         Show this help"
+            echo ""
+            echo "Environment:"
+            echo "  FROSTBITE_TOOLCHAIN  Path to toolchain (default: auto-detect)"
+            echo ""
+            echo "Examples:"
+            echo "  fb-cc hello.c -o hello.elf"
+            echo "  fb-cc -O3 math.c utils.c -o program.elf"
+            echo "  frostbite-run hello.elf"
+            exit 0
+            ;;
+        -I*|-O*|-D*|-W*|-g|-std=*)
+            EXTRA_FLAGS+=("$1")
+            shift
+            ;;
+        -*)
+            echo "Warning: Unknown option: $1"
+            shift
+            ;;
+        *)
+            SOURCES+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [ ${#SOURCES[@]} -eq 0 ]; then
+    echo "Error: No source files specified"
+    echo "Usage: fb-cc source.c -o output.elf"
+    exit 1
+fi
+
+if [ -z "$OUTPUT" ]; then
+    # Default output name
+    base=$(basename "${SOURCES[0]}" .c)
+    base=$(basename "$base" .cpp)
+    if [ $ASM_ONLY -eq 1 ]; then
+        OUTPUT="$base.s"
+    elif [ $COMPILE_ONLY -eq 1 ]; then
+        OUTPUT="$base.o"
+    else
+        OUTPUT="$base.elf"
+    fi
+fi
+
+# Compiler flags for bare-metal RISC-V 64-bit
+# Note: We use rv64imfd (no 'c') to avoid compressed instructions
+# while enabling native float/double in the VM.
+CFLAGS="-target riscv64 -march=rv64imfd -mabi=lp64"
+CFLAGS="$CFLAGS -nostdlib -ffreestanding"
+CFLAGS="$CFLAGS -O2 -fno-builtin -fno-stack-protector"
+CFLAGS="$CFLAGS -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables"
+CFLAGS="$CFLAGS -I$INCLUDE_DIR"
+
+# Add user flags
+CFLAGS="$CFLAGS ${EXTRA_FLAGS[*]}"
+
+# Create temp directory
+TMPDIR=$(mktemp -d)
+trap "rm -rf $TMPDIR" EXIT
+
+if [ $VERBOSE -eq 1 ]; then
+    echo "Toolchain: $FROSTBITE_TOOLCHAIN"
+    echo "Sources: ${SOURCES[*]}"
+    echo "Output: $OUTPUT"
+    echo "CFLAGS: $CFLAGS"
+fi
+
+# Assembly only
+if [ $ASM_ONLY -eq 1 ]; then
+    if [ ${#SOURCES[@]} -ne 1 ]; then
+        echo "Error: -S requires exactly one source file"
+        exit 1
+    fi
+    [ $VERBOSE -eq 1 ] && echo "clang $CFLAGS -S ${SOURCES[0]} -o $OUTPUT"
+    clang $CFLAGS -S "${SOURCES[0]}" -o "$OUTPUT"
+    echo "Assembly: $OUTPUT"
+    exit 0
+fi
+
+# Compile only
+if [ $COMPILE_ONLY -eq 1 ]; then
+    if [ ${#SOURCES[@]} -ne 1 ]; then
+        echo "Error: -c requires exactly one source file"
+        exit 1
+    fi
+    [ $VERBOSE -eq 1 ] && echo "clang $CFLAGS -c ${SOURCES[0]} -o $OUTPUT"
+    clang $CFLAGS -c "${SOURCES[0]}" -o "$OUTPUT"
+    echo "Object: $OUTPUT"
+    exit 0
+fi
+
+# Full compilation: compile CRT0 and all sources, then link
+
+# Compile CRT0 + allocator
+[ $VERBOSE -eq 1 ] && echo "Compiling CRT0..."
+clang $CFLAGS -c "$CRT0" -o "$TMPDIR/crt0.o" 2>&1 | grep -v "warning:" || true
+
+OBJECTS=("$TMPDIR/crt0.o")
+
+if [ -f "$ALLOC" ]; then
+    [ $VERBOSE -eq 1 ] && echo "Compiling allocator..."
+    clang $CFLAGS -c "$ALLOC" -o "$TMPDIR/frostbite_alloc.o" 2>&1 | grep -v "warning:" || true
+    OBJECTS+=("$TMPDIR/frostbite_alloc.o")
+fi
+
+build_builtins_lib
+BUILTINS_OBJ=""
+if [ -f "$BUILTINS_LIB" ]; then
+    BUILTINS_OBJ="$BUILTINS_LIB"
+fi
+
+# Compile user sources
+for src in "${SOURCES[@]}"; do
+    base=$(basename "$src" .c)
+    base=$(basename "$base" .cpp)
+    [ $VERBOSE -eq 1 ] && echo "Compiling $src..."
+    clang $CFLAGS -c "$src" -o "$TMPDIR/$base.o"
+    OBJECTS+=("$TMPDIR/$base.o")
+done
+
+# Link builtins after user objects to satisfy symbol resolution
+if [ -n "$BUILTINS_OBJ" ]; then
+    OBJECTS+=("$BUILTINS_OBJ")
+fi
+
+# Link
+[ $VERBOSE -eq 1 ] && echo "Linking..."
+ld.lld -T "$LINKER_SCRIPT" "${OBJECTS[@]}" -o "$OUTPUT"
+
+# Show size
+SIZE=$(wc -c < "$OUTPUT" | tr -d '[:space:]')
+echo "Built: $OUTPUT ($SIZE bytes)"
+
+# Optionally show disassembly
+if [ $VERBOSE -eq 1 ]; then
+    echo ""
+    echo "Entry point:"
+    llvm-objdump -d "$OUTPUT" | head -30
+fi

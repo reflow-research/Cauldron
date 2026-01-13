@@ -1,0 +1,20 @@
+[package]
+name = "frostbite-hello"
+version = "0.1.0"
+edition = "2021"
+build = "../../scripts/frostbite-build.rs"
+
+[dependencies]
+frostbite-sdk = { path = "../../rust/frostbite-sdk" }
+
+[features]
+default = []
+onchain = []
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"

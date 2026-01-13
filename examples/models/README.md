@@ -1,0 +1,209 @@
+# Example Models (Finance-Int)
+
+These example manifests target the **finance-int** profile:
+- integer-only inference
+- Q16 fixed-point inputs/outputs
+- i8 weights with Q16 scales
+
+## Conventions
+
+- **Inputs/outputs** are `i32` interpreted as Q16 fixed-point.
+- **Weights** are `i8` stored in row-major order (tree templates use `i32` nodes).
+- **Biases** are `i32` Q16 values.
+- **Scale values** (when used) live in `weights.scales` and are patched into
+  guest templates by ModelKit at build time.
+- **Template constants** like `hidden_dim` and `stack_guard` live under
+  `[build]` for Cauldron to patch into `guest/src/config.rs`.
+
+## linear-liquidity
+
+Manifest: `linear-liquidity.frostbite-model.toml`
+
+Weight layout (`weights.bin`):
+
+```
+offset  size
+0       64 bytes   W (i8, length = INPUT_DIM)
+64      4 bytes    bias (i32 Q16)
+```
+
+Notes:
+- `INPUT_DIM = 64`
+- Output is a single `i32` Q16 score.
+
+## mlp-risk-score
+
+Manifest: `mlp-risk-score.frostbite-model.toml`
+
+Weight layout (`weights.bin`):
+
+```
+offset  size
+0       2048 bytes  W1 (i8, H x I)          [H=32, I=64]
+2048    128 bytes   B1 (i32 Q16, H)
+2176    32 bytes    W2 (i8, O x H)          [O=1, H=32]
+2208    4 bytes     B2 (i32 Q16, O)
+```
+
+Notes:
+- `INPUT_DIM = 64`, `HIDDEN_DIM = 32`, `OUTPUT_DIM = 1`
+- Hidden activation is ReLU on i32 values.
+
+## mlp2-risk-score
+
+Manifest: `mlp2-risk-score.frostbite-model.toml`
+
+Weight layout (`weights.bin`):
+
+```
+offset  size
+0       2048 bytes  W1 (i8, H1 x I)        [H1=32, I=64]
+2048    128 bytes   B1 (i32 Q16, H1)
+2176    512 bytes   W2 (i8, H2 x H1)       [H2=16, H1=32]
+2688    64 bytes    B2 (i32 Q16, H2)
+2752    16 bytes    W3 (i8, O x H2)        [O=1, H2=16]
+2768    4 bytes     B3 (i32 Q16, O)
+```
+
+Notes:
+- `INPUT_DIM = 64`, `HIDDEN_DIM1 = 32`, `HIDDEN_DIM2 = 16`, `OUTPUT_DIM = 1`
+- Hidden activations are ReLU on i32 values.
+
+## mlp3-risk-score
+
+Manifest: `mlp3-risk-score.frostbite-model.toml`
+
+Weight layout (`weights.bin`):
+
+```
+offset  size
+0       2048 bytes  W1 (i8, H1 x I)        [H1=32, I=64]
+2048    128 bytes   B1 (i32 Q16, H1)
+2176    512 bytes   W2 (i8, H2 x H1)       [H2=16, H1=32]
+2688    64 bytes    B2 (i32 Q16, H2)
+2752    128 bytes   W3 (i8, H3 x H2)       [H3=8, H2=16]
+2880    32 bytes    B3 (i32 Q16, H3)
+2912    8 bytes     W4 (i8, O x H3)        [O=1, H3=8]
+2920    4 bytes     B4 (i32 Q16, O)
+```
+
+Notes:
+- `INPUT_DIM = 64`, `HIDDEN_DIM1 = 32`, `HIDDEN_DIM2 = 16`, `HIDDEN_DIM3 = 8`
+- Hidden activations are ReLU on i32 values.
+
+## cnn1d-signal-score
+
+Manifest: `cnn1d-signal-score.frostbite-model.toml`
+
+Weight layout (`weights.bin`):
+
+```
+offset  size
+0       96 bytes   W1 (i8, F x C x K)     [F=8, C=4, K=3]
+96      32 bytes   B1 (i32 Q16, F)
+128     8 bytes    W2 (i8, O x F)         [O=1, F=8]
+136     4 bytes    B2 (i32 Q16, O)
+```
+
+Notes:
+- Schema uses `time_series` with `window=32` and `features=4`.
+- Conv output uses ReLU, followed by global average pooling.
+
+## tiny-cnn-score
+
+Manifest: `tiny-cnn-score.frostbite-model.toml`
+
+Weight layout (`weights.bin`):
+
+```
+offset  size
+0       36 bytes   W1 (i8, F x K x K)     [F=4, K=3]
+36      16 bytes   B1 (i32 Q16, F)
+52      4 bytes    W2 (i8, O x F)         [O=1, F=4]
+56      4 bytes    B2 (i32 Q16, O)
+```
+
+Notes:
+- Schema uses `vector` with `input_shape = [28, 28]` (single-channel).
+- Conv output uses ReLU, followed by global average pooling.
+
+## Custom schema
+
+The custom template uses raw input/output blobs. It validates:
+- input/output sizes
+- optional FBH1 header (schema hash + CRC flags)
+
+It currently computes a simple checksum over the input blob and writes it to
+the start of the output buffer (remaining bytes are zeroed). Replace this
+logic with your model-specific behavior.
+
+## softmax-regression
+
+Manifest: `softmax-regression.frostbite-model.toml`
+
+Weight layout (`weights.bin`):
+
+```
+offset  size
+0       128 bytes  W (i8, O x I)  [O=2, I=64]
+128     8 bytes    bias (i32 Q16, O)
+```
+
+Notes:
+- Outputs are Q16 probabilities after softmax.
+
+## naive-bayes
+
+Manifest: `naive-bayes.frostbite-model.toml`
+
+Weight layout (`weights.bin`):
+
+```
+offset  size
+0       128 bytes  W (i8, O x I)
+128     8 bytes    bias (i32 Q16, O)
+```
+
+Notes:
+- Naive Bayes reduces to a linear scoring pass in log space.
+- Optional softmax is controlled by `build.apply_softmax`.
+
+## two-tower
+
+Manifest: `two-tower.frostbite-model.toml`
+
+Weight layout (`weights.bin`):
+
+```
+offset  size
+0       1024 bytes  W1 (i8, E x A)
+1024    64 bytes    B1 (i32 Q16, E)
+1088    1024 bytes  W2 (i8, E x B)
+2112    64 bytes    B2 (i32 Q16, E)
+```
+
+Notes:
+- `A=64`, `B=64`, `E=16` in the example manifest.
+- Output is dot similarity (Q16) with `dot_shift=16`.
+
+## tree-risk-score
+
+Manifest: `tree-risk-score.frostbite-model.toml`
+
+Weight layout (`weights.bin`):
+
+```
+offset  size
+0       300 bytes  nodes (i32 x 5 per node)
+```
+
+Node layout (five i32 values, Q16 for thresholds/values):
+
+```
+[feature, threshold_q16, left, right, value_q16]
+```
+
+Notes:
+- `feature < 0` marks a leaf; `value_q16` is added to the output.
+- `tree_count = 1` and `tree_node_count = 15` in the example manifest.
+- Tree weights use `quantization = "custom"` with `dtype = "i32"`.
