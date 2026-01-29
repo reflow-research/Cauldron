@@ -2,5 +2,9 @@ frostbite*.txt
 mapped_accounts.txt
 cauldron/rust_tools/target
 cauldron/rust_tools/.tmp
+cauldron/rust_tools/weights-keypair.json
 gatekeeper/target/
 .tmp/
+__pycache__/
+*.pyc
+.smoke-*
