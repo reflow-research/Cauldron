@@ -18,8 +18,9 @@ Both `cauldron` and `frostbite-modelkit` point to the same CLI entrypoint.
 ## Quick start (dev)
 
 ```
-python -m cauldron.cli validate path/to/frostbite-model.toml - see examples folder to get started
+python -m cauldron.cli validate path/to/frostbite-model.toml 
 ```
+*Note* - see examples folder to get started with vendored model templates. 
 
 ## CLI
 
