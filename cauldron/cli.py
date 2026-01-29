@@ -70,7 +70,7 @@ layout = "linear_i8_q16_v1"
 quantization = "q8"
 dtype = "i8"
 scale = "q16"
-header_format = "none"
+header_format = "rvcd-v1"
 
 [weights.scales]
 w_scale_q16 = 65536
@@ -81,7 +81,7 @@ file = "weights.bin"
 hash = "sha256:REPLACE_ME"
 size_bytes = 68
 chunk_size = 9500000
-data_offset = 0
+data_offset = 12
 segment_index = 1
 
 [[segments]]
@@ -146,7 +146,7 @@ layout = "softmax_i8_q16_v1"
 quantization = "q8"
 dtype = "i8"
 scale = "q16"
-header_format = "none"
+header_format = "rvcd-v1"
 
 [weights.scales]
 w_scale_q16 = 65536
@@ -158,7 +158,7 @@ hash = "sha256:REPLACE_ME"
 # Layout: W (i8 * output_dim * input_dim) + bias (i32 * output_dim)
 size_bytes = 136
 chunk_size = 9500000
-data_offset = 0
+data_offset = 12
 segment_index = 1
 
 [[segments]]
@@ -223,7 +223,7 @@ layout = "naive_bayes_i8_q16_v1"
 quantization = "q8"
 dtype = "i8"
 scale = "q16"
-header_format = "none"
+header_format = "rvcd-v1"
 
 [weights.scales]
 w_scale_q16 = 65536
@@ -235,7 +235,7 @@ hash = "sha256:REPLACE_ME"
 # Layout: W (i8 * output_dim * input_dim) + bias (i32 * output_dim)
 size_bytes = 136
 chunk_size = 9500000
-data_offset = 0
+data_offset = 12
 segment_index = 1
 
 [[segments]]
@@ -300,7 +300,7 @@ layout = "mlp_i8_q16_v1"
 quantization = "q8"
 dtype = "i8"
 scale = "q16"
-header_format = "none"
+header_format = "rvcd-v1"
 
 [weights.scales]
 w1_scale_q16 = 65536
@@ -312,7 +312,7 @@ file = "weights.bin"
 hash = "sha256:REPLACE_ME"
 size_bytes = 2212
 chunk_size = 9500000
-data_offset = 0
+data_offset = 12
 segment_index = 1
 
 [[segments]]
@@ -380,7 +380,7 @@ layout = "mlp2_i8_q16_v1"
 quantization = "q8"
 dtype = "i8"
 scale = "q16"
-header_format = "none"
+header_format = "rvcd-v1"
 
 [weights.scales]
 w1_scale_q16 = 65536
@@ -394,7 +394,7 @@ hash = "sha256:REPLACE_ME"
 # Layout: W1 (i8 H1 x I) + B1 (i32 H1) + W2 (i8 H2 x H1) + B2 (i32 H2) + W3 (i8 O x H2) + B3 (i32 O)
 size_bytes = 2772
 chunk_size = 9500000
-data_offset = 0
+data_offset = 12
 segment_index = 1
 
 [[segments]]
@@ -464,7 +464,7 @@ layout = "mlp3_i8_q16_v1"
 quantization = "q8"
 dtype = "i8"
 scale = "q16"
-header_format = "none"
+header_format = "rvcd-v1"
 
 [weights.scales]
 w1_scale_q16 = 65536
@@ -479,7 +479,7 @@ hash = "sha256:REPLACE_ME"
 # Layout: W1 (i8 H1 x I) + B1 (i32 H1) + W2 (i8 H2 x H1) + B2 (i32 H2) + W3 (i8 H3 x H2) + B3 (i32 H3) + W4 (i8 O x H3) + B4 (i32 O)
 size_bytes = 2924
 chunk_size = 9500000
-data_offset = 0
+data_offset = 12
 segment_index = 1
 
 [[segments]]
@@ -548,7 +548,7 @@ layout = "cnn1d_i8_q16_v1"
 quantization = "q8"
 dtype = "i8"
 scale = "q16"
-header_format = "none"
+header_format = "rvcd-v1"
 
 [weights.scales]
 w1_scale_q16 = 65536
@@ -561,7 +561,7 @@ hash = "sha256:REPLACE_ME"
 # Layout: W1 (i8 F x C x K) + B1 (i32 F) + W2 (i8 O x F) + B2 (i32 O)
 size_bytes = 140
 chunk_size = 9500000
-data_offset = 0
+data_offset = 12
 segment_index = 1
 
 [[segments]]
@@ -631,7 +631,7 @@ layout = "tiny_cnn_i8_q16_v1"
 quantization = "q8"
 dtype = "i8"
 scale = "q16"
-header_format = "none"
+header_format = "rvcd-v1"
 
 [weights.scales]
 w1_scale_q16 = 65536
@@ -644,7 +644,7 @@ hash = "sha256:REPLACE_ME"
 # Layout: W1 (i8 F x K x K) + B1 (i32 F) + W2 (i8 O x F) + B2 (i32 O)
 size_bytes = 60
 chunk_size = 9500000
-data_offset = 0
+data_offset = 12
 segment_index = 1
 
 [[segments]]
@@ -710,7 +710,7 @@ layout = "tree_q16_v1"
 quantization = "custom"
 dtype = "i32"
 scale = "q16"
-header_format = "none"
+header_format = "rvcd-v1"
 
 [[weights.blobs]]
 name = "main"
@@ -719,7 +719,7 @@ hash = "sha256:REPLACE_ME"
 # Layout: nodes packed as i32 (feature, threshold_q16, left, right, value_q16)
 size_bytes = 300
 chunk_size = 9500000
-data_offset = 0
+data_offset = 12
 segment_index = 1
 
 [[segments]]
@@ -837,7 +837,7 @@ layout = "two_tower_i8_q16_v1"
 quantization = "q8"
 dtype = "i8"
 scale = "q16"
-header_format = "none"
+header_format = "rvcd-v1"
 
 [weights.scales]
 w1_scale_q16 = 65536
@@ -850,7 +850,7 @@ hash = "sha256:REPLACE_ME"
 # Layout: W1 (i8 E x A) + B1 (i32 E) + W2 (i8 E x B) + B2 (i32 E)
 size_bytes = 2176
 chunk_size = 9500000
-data_offset = 0
+data_offset = 12
 segment_index = 1
 
 [[segments]]
@@ -1262,7 +1262,10 @@ def _apply_accounts_env(env: dict[str, str], accounts_path: str, require_weights
             raise ValueError("accounts file has multiple weights segments; single-account mode only")
         seg = weights[0]
         if seg.keypair:
-            env["FROSTBITE_CHUNK_KEYPAIR"] = seg.keypair
+            kp_path = Path(seg.keypair)
+            if not kp_path.is_absolute():
+                kp_path = Path(accounts_path).resolve().parent / kp_path
+            env["FROSTBITE_CHUNK_KEYPAIR"] = str(kp_path)
         elif require_weights_keypair:
             raise ValueError("weights segment requires keypair for upload")
     return env
@@ -2164,6 +2167,7 @@ def _cmd_program_load(args: argparse.Namespace) -> int:
         "--vm",
         info["vm_pubkey"],
         "--load",
+        "--load-only",
     ]
 
     if args.rpc_url:

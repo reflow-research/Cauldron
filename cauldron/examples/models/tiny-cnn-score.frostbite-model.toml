@@ -46,7 +46,7 @@ layout = "tiny_cnn_i8_q16_v1"
 quantization = "q8"
 dtype = "i8"
 scale = "q16"
-header_format = "none"
+header_format = "rvcd-v1"
 
 [weights.scales]
 w1_scale_q16 = 65536
@@ -59,7 +59,7 @@ hash = "sha256:REPLACE_ME"
 # Layout: W1 (i8 F x K x K) + B1 (i32 F) + W2 (i8 O x F) + B2 (i32 O)
 size_bytes = 60
 chunk_size = 9500000
-data_offset = 0
+data_offset = 12
 segment_index = 1
 
 [[segments]]

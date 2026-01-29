@@ -1,12 +1,12 @@
 # Cauldron (Frostbite ModelKit)
 
-Cauldron was created for designing, training, uploading, and invoking AI models on the Solana blockchain. Cauldron interfaces with the frostbite RISC-V computer to make these agents conduct meaningul work inside the CU budgets of 1 transaction. Inference happens at execution time on current state data. This means AI agents invoked with cauldron have 0 latency for acting on data that is exposed to programs on Solana. No more computing off chain and then praying that your transaction matches the current chain state. 
+Cauldron was created for designing, training, uploading, and invoking AI models on the Solana blockchain. Cauldron interfaces with the frostbite RISC-V computer to make these agents conduct meaningul work inside the CU budgets of 1 (or more) transaction(s). Inference happens at execution time on current state data. This means AI agents invoked with cauldron have 0 latency for acting on data that is exposed to programs on Solana. No more computing off chain and then praying that your transaction matches the current chain state. 
 
-This framework is designed to be used in assistance with agentic coding tools. Point your clankers to the read me and ABI format documentation and they will be able to guide you through the process for designing a model and formatting it to be accepted by frostbite. Right now frostbite is live on the devnet, so point your solana CLI to the devnet to use this in the devnet sandbox. 
+This framework is designed to be used in assistance with agentic coding tools. Point your clankers to the read me and ABI format documentation and they will be able to guide you through the process for designing a model and formatting it to be accepted by frostbite. Right now frostbite is live on the devnet, so point your solana CLI to the devnet to use this in the devnet sandbox. Use the VM and Ram accounts we have created, listed in CAULDRON.MD
 
-One of the key benefit of actual on chain AI is that inference happens at execution time with any data that is exposed to a solana program. You can train models that route dynamically, abort txns if toxic flow is detected, traverse and trim liqudiity pool graphs, analyze pool depth and volume inflows, and detect if a token is likely a rug or not to name a few ideas. There is really no limit to what you can do provided you respect the contraints of mainnet solana. 
+One of the key benefit of actual on chain AI is that inference happens at execution time with any data that is exposed to a solana program. You can train models that route dynamically, abort txns if toxic flow is detected, traverse and trim liqudiity pool graphs, analyze pool depth and volume inflows, rebalance yeild portfolies, and detect if a token is likely a rug or not; to name a few ideas. There is really no limit to what you can do provided you respect the contraints of mainnet Solana. 
 
-As far as we know we are the first to do legitimate on chain AI inference, so we are keen to explore where this can go. A new enviroment of verifiable, trustless, and financially meaningul AI is now upon us. PR's and contributions are welcome. We will be open sourcing the frostbite program in the future. 
+As far as we know, we are the first to do legitimate on chain AI inference. We are keen to explore where this can go. A new enviroment of verifiable, trustless, and financially meaningul AI is now upon us. PR's and contributions are welcome. We will be open sourcing the frostbite program in the future. 
 
 
 
@@ -18,7 +18,7 @@ Both `cauldron` and `frostbite-modelkit` point to the same CLI entrypoint.
 ## Quick start (dev)
 
 ```
-python -m cauldron.cli validate path/to/frostbite-model.toml
+python -m cauldron.cli validate path/to/frostbite-model.toml - see examples folder to get started
 ```
 
 ## CLI
@@ -36,7 +36,7 @@ python -m cauldron.cli validate path/to/frostbite-model.toml
 - `cauldron accounts init --manifest <manifest> --ram-count 1`
 - `cauldron accounts show --accounts frostbite-accounts.toml`
 - `cauldron accounts create --accounts frostbite-accounts.toml`
-- `cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest`
+- `cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest` (load-only)
 - `cauldron invoke --accounts frostbite-accounts.toml`
 - `cauldron schema-hash --manifest <manifest> [--update-manifest]`
 - `cauldron input --manifest <manifest> --data input.json [--header]`
@@ -51,6 +51,11 @@ place the binary in `cauldron/bin/<platform>/` or `cauldron/toolchain/bin/<platf
 This repo ships a prebuilt `frostbite-run-onchain` per platform
 (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`, `windows-x64`). If it doesn’t run
 on your system, replace it and/or set `FROSTBITE_RUN_ONCHAIN`.
+
+**Note** 
+
+The vendored frostbite-run-onchain may be deprecated, changes have been made since. Be sure to 
+clone the sdk in addition to cauldron. 
 
 Install-time selectors for packaging:
 - `scripts/select-runner.py` (pip / Python)
@@ -71,6 +76,9 @@ sdist builds.
 The Frostbite program itself is pre-deployed (devnet v0). Cauldron defaults to
 the devnet program ID; override with `FROSTBITE_PROGRAM_ID` or in the accounts
 file if needed.
+
+Devnet shared VM/RAM accounts (with usage and ownership notes) are listed in
+`CAULDRON.md` under "Devnet shared VM/RAM accounts".
 
 By default `init` copies the full guest template. Use `--stub` to generate a
 minimal placeholder instead.
@@ -194,6 +202,15 @@ upload tool. The Frostbite program ID is preconfigured for devnet.
 If no overrides are provided, it uses the Solana CLI config values.
 
 For single-account weights, you can upload the full `weights.bin` directly.
+Unless you are going into LLM territory, we highly doubt you will exceed 10mb weights,
+and thus need a sharded weight account. If you want to use our LLM on chain; which
+exceeds 10mb for weights, message @12g8ge for more details. 
+
+Note: `cauldron upload` writes an RVCD v1 header into the weights account.
+Set `weights.header_format = "rvcd-v1"` (and `data_offset = 12` if specified)
+so guest code reads the correct weights offsets.
+If you do not specify RAM accounts, `invoke` will create a temporary RAM account
+for the run. Use `accounts init --ram-file` for persistent RAM mappings.
 
 ## SDK examples
 
@@ -233,6 +250,7 @@ Low-latency flow: preload guest + inputs, then invoke without upload delays.
 After `accounts init`, fill in the VM/weights/RAM keypairs in
 `frostbite-accounts.toml` (or pass `--vm-keypair`/`--weights-keypair`/
 `--ram-keypair`) before creating accounts or uploading.
+
 You also need a VM account initialized by the Frostbite program (for example,
 run the following once to create the VM, then copy the pubkey into the accounts
 file):
@@ -241,6 +259,8 @@ file):
 frostbite-run-onchain guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest \
   --vm-save frostbite_vm_accounts.txt
 ```
+Note: we include a list of VM and Ram accounts in CAULDRON.md. There are no permissions now, so feel free to use them so you dont 
+burn devnet sol. 
 
 ```
 cauldron accounts init --manifest frostbite-model.toml --ram-count 1
@@ -268,3 +288,4 @@ For low-latency invocation (assumes program + input already staged):
 ```
 cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 50000
 ```
+Low latency innvocation is what you will want to use in most HFT / MM scenarios. 

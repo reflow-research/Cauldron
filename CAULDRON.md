@@ -14,12 +14,16 @@ cd my-model
 cauldron convert --manifest frostbite-model.toml --input weights.json --pack
 cauldron build-guest --manifest frostbite-model.toml
 cauldron chunk --manifest frostbite-model.toml
-cauldron upload --all "weights_chunk*.bin" --cluster localnet
+cauldron upload --all "weights_chunk*.bin" --cluster devnet
 ```
 
-## Running examples (localnet)
+Note: `cauldron upload` writes an RVCD v1 header into weights accounts. Use
+`weights.header_format = "rvcd-v1"` (and `data_offset = 12` if specified) so
+guest code reads weights at the correct offset.
 
-See `docs/RUNNING_EXAMPLES.md` for a full localnet walkthrough (weights, guest
+## Running examples (devnet)
+
+See `docs/RUNNING_EXAMPLES.md` for a full devnet walkthrough (weights, guest
 build, on-chain invoke). Keep `abi.entry >= 0x4000` so guest code does not
 overwrite the VM header/control block.
 
@@ -86,7 +90,7 @@ classes so the training harness matches the manifest dimensions.
 - `cauldron accounts init --manifest frostbite-model.toml --ram-count 1`
 - `cauldron accounts show --accounts frostbite-accounts.toml`
 - `cauldron accounts create --accounts frostbite-accounts.toml`
-- `cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest`
+- `cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest` (load-only)
 - `cauldron invoke --accounts frostbite-accounts.toml --instructions 50000`
 
 ## Optional deps
@@ -139,6 +143,56 @@ deploy it.
 
 If you select `--cluster surfpool`, provide `--rpc-url` or set
 `SURFPOOL_RPC_URL`.
+
+## Devnet shared VM/RAM accounts (updated 2026-01-28)
+
+The Frostbite devnet program has a set of pre-funded VM and RAM accounts that
+can be reused to avoid large devnet SOL spends.
+
+Ownership / usage notes:
+- These accounts are program-owned. No private keys are required to use them.
+- There is no access control: any user can overwrite VM state or RAM contents.
+  Treat them as shared scratch. Do not store secrets or rely on persistence.
+- Use your own weights accounts (PDA/keypair) and your own guest program PDAs.
+- Legacy oversized VM accounts (~614KB) remain valid because Frostbite only
+  enforces a minimum size. The canonical VM size is 262,689 bytes.
+- If you need isolation or stable RAM, create your own VM/RAM accounts.
+
+VM accounts (legacy oversized, still valid):
+- 8twJztqwdoPyi6v6KA2YcR2auH7pPegskWXsyESZzQrP
+- 52Q2ZUfTDP46kfJAbf5jKTMTuRqHgRgU8YS6SBYRPktp
+- 5mQw87fdxfEjv3pg89aQW9NE3gsb2EqPA4QvBkJMS4PH
+- 8D6yTQvkA4YobPFF95M6Uw848bwiT6qRuPXDSZgci9Fx
+- AjinBnLJPa77yuQGxGpYYbNuuiNRqnvVS9kLv5dvuVkS
+- CdHFGc21n7iVMaBHGCeRwLnb9SR2ah9C8S3qJT9dMQk5
+- G3LS9imZmbNpCBmCSd8GhSpvQEZDDbc8jDarb9P2XLZp
+- H2NJGZcdrTvZE4TaGmdpSxpbGnk8UpNZwR2i1uVbgkw3
+
+VM accounts (canonical size, 262,689 bytes):
+- EZcnmSFyxdm7qNHdt1xjVcgNh3GEs5cBErJRDWdcVvfq
+- 9b9ogpfyfpNejyA9Jzq8YSW8v2XepiPrSWbnZ9qS3LrY
+- FgBoEPRtV31VerkVtAqYYMn53n9uxx1o9Rimjz8F5CdV
+- 2gktRqhgSQK26eD6bchEtTQ8YtNNKnyPATzVLzTrqB1S
+- NZJSPYDTyPsZ2Reqtz6DFP7TGjunLyKCZWATDfVDqPr
+
+RAM accounts (4 MB each, writable):
+- rw:CZq7wPvvQYaFiVXn6MTS1ZAAJathYH8N8a9UJTzkgnSP
+- rw:ZHLUK4zdMKm3LgJqVo9fcb93g3dDUGzgrmQToeuK2cE
+- rw:CaZNX6z3K8PBpcbduoiHsaVn6tw4itgAQKbNkygXSJJd
+- rw:EnoTk59RWR5U38j6dumESYJwgtRNMohdRwRZC4vUNJxh
+
+Example usage:
+```
+# ram_accounts_devnet.txt
+rw:CZq7wPvvQYaFiVXn6MTS1ZAAJathYH8N8a9UJTzkgnSP
+rw:ZHLUK4zdMKm3LgJqVo9fcb93g3dDUGzgrmQToeuK2cE
+rw:CaZNX6z3K8PBpcbduoiHsaVn6tw4itgAQKbNkygXSJJd
+rw:EnoTk59RWR5U38j6dumESYJwgtRNMohdRwRZC4vUNJxh
+
+cauldron accounts init --manifest frostbite-model.toml \
+  --vm EZcnmSFyxdm7qNHdt1xjVcgNh3GEs5cBErJRDWdcVvfq \
+  --ram-file ram_accounts_devnet.txt
+```
 
 ## Accounts mapping
 

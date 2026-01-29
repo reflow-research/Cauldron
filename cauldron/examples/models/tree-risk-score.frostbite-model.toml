@@ -42,7 +42,7 @@ layout = "tree_q16_v1"
 quantization = "custom"
 dtype = "i32"
 scale = "q16"
-header_format = "none"
+header_format = "rvcd-v1"
 
 [[weights.blobs]]
 name = "main"
@@ -51,7 +51,7 @@ hash = "sha256:REPLACE_ME"
 # Layout: nodes packed as i32 (feature, threshold_q16, left, right, value_q16)
 size_bytes = 300
 chunk_size = 9500000
-data_offset = 0
+data_offset = 12
 segment_index = 1
 
 [[segments]]

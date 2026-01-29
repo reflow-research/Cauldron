@@ -41,7 +41,7 @@ layout = "softmax_i8_q16_v1"
 quantization = "q8"
 dtype = "i8"
 scale = "q16"
-header_format = "none"
+header_format = "rvcd-v1"
 
 [weights.scales]
 w_scale_q16 = 65536
@@ -53,7 +53,7 @@ hash = "sha256:REPLACE_ME"
 # Layout: W (i8 O x I) + bias (i32 O)
 size_bytes = 136
 chunk_size = 9500000
-data_offset = 0
+data_offset = 12
 segment_index = 1
 
 [[segments]]

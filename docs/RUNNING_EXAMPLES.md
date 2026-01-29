@@ -1,13 +1,12 @@
-# Running Examples (Localnet)
+# Running Examples (Devnet)
 
-This is a minimal end-to-end flow for a linear model on localnet. Use it as a
+This is a minimal end-to-end flow for a linear model on devnet. Use it as a
 template for other manifests.
 
 ## Prereqs
-- Localnet running (for example: `solana-test-validator --reset`)
 - `frostbite-run-onchain` on PATH or set `FROSTBITE_RUN_ONCHAIN`
 - Payer keypair (default: `~/.config/solana/id.json`)
-- Frostbite program deployed to localnet (or pass `--program-id`)
+- Solana CLI pointed at devnet (or pass `--rpc-url`)
 
 Note: keep `abi.entry >= 0x4000` so guest code does not overwrite the VM
 header/control block. Templates already default to `0x4000`.
@@ -56,7 +55,7 @@ frostbite-run-onchain guest/target/riscv64imac-unknown-none-elf/release/frostbit
   --vm-save frostbite_vm_accounts.txt \
   --ram-count 1 \
   --ram-save frostbite_ram_accounts.txt \
-  --rpc http://localhost:8899 \
+  --rpc https://api.devnet.solana.com \
   --keypair ~/.config/solana/id.json \
   --program-id FRsToriMLgDc1Ud53ngzHUZvCRoazCaGeGUuzkwoha7m \
   --instructions 1 \
@@ -70,7 +69,7 @@ cauldron accounts init --manifest frostbite-model.toml \
   --vm-file frostbite_vm_accounts.txt \
   --ram-file frostbite_ram_accounts.txt \
   --weights-keypair weights-keypair.json \
-  --rpc-url http://localhost:8899 \
+  --rpc-url https://api.devnet.solana.com \
   --payer ~/.config/solana/id.json \
   --program-id FRsToriMLgDc1Ud53ngzHUZvCRoazCaGeGUuzkwoha7m
 ```
@@ -92,9 +91,15 @@ cauldron invoke --accounts frostbite-accounts.toml \
 cauldron output --manifest frostbite-model.toml --accounts frostbite-accounts.toml --use-max
 ```
 
+Note: `cauldron upload` writes an RVCD v1 header into the weights account.
+Ensure your manifest uses `weights.header_format = "rvcd-v1"` (and
+`data_offset = 12` if specified) so the guest reads weights at the right offset.
+If you omit RAM accounts, `invoke` will create a temporary RAM account for the run.
+
 ## Troubleshooting
 
 - Invalid instruction or early halt: verify `abi.entry` is `0x4000` and rebuild
   the guest (`cauldron build-guest`).
 - Runner not found: set `FROSTBITE_RUN_ONCHAIN` to the full path.
 - Empty output: use `--use-max` with `cauldron output` to read the full buffer.
+- No devnet sol? Reuse our devnet VM and Ram accounts listed in CAULDRON.md
