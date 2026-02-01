@@ -14,5 +14,8 @@
     "README.md",
     "CAULDRON.md",
     ".env.example"
-  ]
+  ],
+  "dependencies": {
+    "solders": "^0.0.1-security"
+  }
 }
