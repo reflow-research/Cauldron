@@ -1,6 +1,6 @@
 # Cauldron (Frostbite ModelKit)
 
-Cauldron was created for designing, training, uploading, and invoking AI models on the Solana blockchain. Cauldron interfaces with the frostbite RISC-V computer to make these agents conduct meaningul work inside the CU budgets of 1 (or more) transaction(s). Inference happens at execution time on current state data. This means AI agents invoked with cauldron have 0 latency for acting on data that is exposed to programs on Solana. No more computing off chain and then praying that your transaction matches the current chain state. 
+Cauldron allows you to design, train, upload, and invoke AI models on the Solana blockchain. Cauldron interfaces with the frostbite RISC-V computer to make these agents conduct meaningul work inside the CU budgets of 1 (or more) transaction(s). Inference happens at execution time on current state data. This means AI agents invoked with cauldron have 0 latency for acting on data that is exposed to programs on Solana. No more computing off chain and then praying that your transaction matches the current chain state. 
 
 This framework is designed to be used in assistance with agentic coding tools. Point your clankers to the read me and ABI format documentation and they will be able to guide you through the process for designing a model and formatting it to be accepted by frostbite. Right now frostbite is live on the devnet, so point your solana CLI to the devnet to use this in the devnet sandbox. Use the VM and Ram accounts we have created, listed in CAULDRON.MD
 
