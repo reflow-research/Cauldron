@@ -8,3 +8,6 @@ gatekeeper/target/
 __pycache__/
 *.pyc
 .smoke-*
+node_modules
+garden 
+node_modules
