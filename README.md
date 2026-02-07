@@ -73,7 +73,8 @@ Detailed semantic output checks are recorded in
 - `cauldron accounts close-segment --accounts frostbite-accounts.toml --kind weights --slot 1`
 - `cauldron accounts close-vm --accounts frostbite-accounts.toml`
 - `cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest` (load-only)
-- `cauldron invoke --accounts frostbite-accounts.toml`
+- `cauldron invoke --accounts frostbite-accounts.toml --mode fresh`
+- `cauldron invoke --accounts frostbite-accounts.toml --mode resume`
 - `cauldron schema-hash --manifest <manifest> [--update-manifest]`
 - `cauldron input --manifest <manifest> --data input.json [--header]`
 - `cauldron input-write --manifest <manifest> --accounts frostbite-accounts.toml --data input.json`
@@ -89,9 +90,17 @@ override binary is available, the helper must be on your PATH.
 If you manage memory accounts manually (mapped `rw:` segments), temp RAM is
 suppressed by default; pass `--ram-count` to explicitly request it.
 
+`cauldron invoke` now defaults to **fresh seeded restart** semantics for
+seeded-v3 accounts (runtime reset + entry PC restart each run).
+Use `--mode resume` only when you intentionally want persistent VM execution
+state across invocations. Fresh mode does not require a VM clear transaction
+between inferences.
+
 `cauldron accounts init` now defaults to seeded deterministic accounts (v3 memory model).
 Use `--legacy-accounts` only when you intentionally want manual non-seeded
 account management.
+Seeded account files now include `vm.entry` (defaults to `abi.entry`, fallback
+`0x4000`) so fresh invocations do not require per-run program reload.
 
 `frostbite-run-onchain` fallback RAM accounts default to `262144` bytes
 (`256 KiB`) per segment; override with `cauldron invoke --ram-bytes` when needed.
@@ -315,7 +324,8 @@ For custom schemas, pass `--input-bin` or provide `payload_hex`/
 
 ## Fast path (preload + invoke)
 
-Low-latency flow: preload guest + inputs, then invoke without upload delays.
+Low-latency flow: preload guest once, then repeat input-write + invoke without
+upload or reload delays.
 You will want to use a low-latency flow for HFT/MM strategies and other atomic actions.
 We recommend building a shell script to suit your needs once you have your model designed
 and uploaded. 
@@ -325,8 +335,10 @@ cauldron accounts init --manifest frostbite-model.toml --ram-count 1
 cauldron accounts create --accounts frostbite-accounts.toml
 cauldron upload --file weights.bin --accounts frostbite-accounts.toml
 cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest
+
+# repeat this block for each inference
 cauldron input-write --manifest frostbite-model.toml --accounts frostbite-accounts.toml --data input.json
-cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 50000 --max-tx 10
+cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast --instructions 50000 --max-tx 10
 cauldron output --manifest frostbite-model.toml --accounts frostbite-accounts.toml
 ```
 
@@ -343,13 +355,21 @@ cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64ima
 
 For low-latency invocation (assumes program + input already staged):
 ```bash
-cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 50000 --max-tx 10
+cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast --instructions 50000 --max-tx 10
 ```
 
 For heavier templates (`cnn1d`, `tiny_cnn`), use smaller slices:
 
 ```bash
-cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 10000 --max-tx 120
+cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast --instructions 10000 --max-tx 120
+```
+
+If you are reading immediately after invoke on shared RPC endpoints, use
+`--verbose` on invoke and confirm the execution signature before reading:
+
+```bash
+solana confirm --url https://api.devnet.solana.com --commitment finalized <EXECUTE_SIGNATURE>
+cauldron output --manifest frostbite-model.toml --accounts frostbite-accounts.toml
 ```
 
 Scripted wrapper for this full flow:

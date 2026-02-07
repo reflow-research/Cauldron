@@ -81,6 +81,28 @@ def parse_vm_seed(vm_entry: Dict[str, Any]) -> Optional[int]:
     raise ValueError("vm.seed must be an integer or string")
 
 
+def parse_vm_entry(vm_entry: Dict[str, Any]) -> Optional[int]:
+    raw = vm_entry.get("entry")
+    if raw is None:
+        return None
+    if isinstance(raw, int):
+        if raw < 0 or raw > (2**32 - 1):
+            raise ValueError("vm.entry must be within u32 range")
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        if text.lower().startswith("0x"):
+            value = int(text, 16)
+        else:
+            value = int(text, 10)
+        if value < 0 or value > (2**32 - 1):
+            raise ValueError("vm.entry must be within u32 range")
+        return value
+    raise ValueError("vm.entry must be an integer or string")
+
+
 def parse_account_model(vm_entry: Dict[str, Any]) -> Optional[str]:
     raw = vm_entry.get("account_model")
     if raw is None:
@@ -307,6 +329,8 @@ def write_accounts(path: Path, data: Dict[str, Any]) -> None:
         lines.append(f"keypair = \"{vm['keypair']}\"")
     if isinstance(vm.get("seed"), int):
         lines.append(f"seed = {vm['seed']}")
+    if isinstance(vm.get("entry"), int):
+        lines.append(f"entry = 0x{vm['entry']:x}")
     if isinstance(vm.get("account_model"), str) and vm.get("account_model"):
         lines.append(f"account_model = \"{vm['account_model']}\"")
     if isinstance(vm.get("authority"), str) and vm.get("authority"):

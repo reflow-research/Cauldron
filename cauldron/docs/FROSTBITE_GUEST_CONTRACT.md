@@ -13,6 +13,15 @@ RISC-V and executed by the Frostbite VM.
 The guest program runs from a bare-metal entrypoint and is responsible for
 reading its input, producing output, and exiting with a status code.
 
+Seeded-v3 execute modes:
+- Fresh restart (`EXECUTE_RESTART_V3`): runtime state is reset and PC is set to
+  `abi.entry` (or `vm.entry` override), then execution begins.
+- Resume (`EXECUTE_V3`): runtime state continues from the existing VM state.
+
+Fresh restart resets registers/pc/counters, but does not zero all scratch
+bytes. Guests should write all output bytes they rely on and set `output_len`
+deterministically each run.
+
 ## 2. Memory and addressing
 
 ### 2.1 Segment addressing

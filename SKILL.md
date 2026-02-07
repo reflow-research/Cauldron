@@ -51,8 +51,9 @@ cauldron upload --file weights.bin --accounts frostbite-accounts.toml
 
 ```bash
 cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest
+# repeat the next three commands per inference
 cauldron input-write --manifest frostbite-model.toml --accounts frostbite-accounts.toml --data input.json
-cauldron invoke --accounts frostbite-accounts.toml --fast
+cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast
 cauldron output --manifest frostbite-model.toml --accounts frostbite-accounts.toml
 ```
 
@@ -69,6 +70,7 @@ Shortcut wrapper:
 
 - Recommended workflow is seeded deterministic account derivation (`create_with_seed`).
 - `accounts init` uses this mode by default (or `vm.seed` in `frostbite-accounts.toml`).
+- `accounts init` writes `vm.entry` for fresh restart execution defaults.
 - Use `--legacy-accounts` only for manual non-seeded account mode.
 - `vm.seed` + authority determines VM address.
 - Segment address is derived from authority + `vm.seed` + kind + slot.
@@ -102,18 +104,22 @@ Shortcut cleanup:
 For heavier templates (`cnn1d`, `tiny_cnn`) use smaller slices:
 
 ```bash
-cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 10000 --max-tx 120
+cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast --instructions 10000 --max-tx 120
 ```
 
 For typical lighter templates (`linear`, `softmax`, `naive_bayes`, `mlp*`,
 `two_tower`, `tree`, `custom`) this is usually sufficient:
 
 ```bash
-cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 50000 --max-tx 10
+cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast --instructions 50000 --max-tx 10
 ```
 
 `cauldron invoke` auto-sets `--ram-count 0` when mapped `rw:` segments already
 exist.
+`cauldron invoke` defaults to seeded fresh-restart mode. Use `--mode resume`
+only when you intentionally want persistent VM runtime state.
+If output is read immediately after invoke on shared RPC, run invoke with
+`--verbose`, confirm the execute signature at `finalized`, then read output.
 `cauldron upload` rejects source-format files (`.json`, `.npz`, `.pt`, etc.) by
 default; upload `weights.bin` or pass `--allow-raw-upload` explicitly.
 

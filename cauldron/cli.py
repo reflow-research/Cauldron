@@ -30,6 +30,7 @@ from .accounts import (
     write_accounts,
     parse_segments,
     resolve_pubkey,
+    parse_vm_entry,
     parse_vm_seed,
     resolve_authority_pubkey,
     segment_kind_code,
@@ -1415,6 +1416,7 @@ def _accounts_segment_metas(
         authority_override = _resolve_accounts_path(accounts_path, vm["authority_keypair"])
 
     vm_seed = parse_vm_seed(vm)
+    vm_entry_pc = parse_vm_entry(vm)
     authority_pubkey = resolve_authority_pubkey(accounts, authority_keypair_override=authority_override)
     vm_pubkey = resolve_pubkey(vm)
     if vm_seed is not None:
@@ -1495,6 +1497,7 @@ def _accounts_segment_metas(
         "vm_pubkey": vm_pubkey,
         "authority_pubkey": authority_pubkey,
         "vm_seed": str(vm_seed) if vm_seed is not None else None,
+        "vm_entry": str(vm_entry_pc) if vm_entry_pc is not None else None,
     }, [f"{'rw' if writable else 'ro'}:{pubkey}" for _, writable, pubkey in mapped]
 
 
@@ -2213,6 +2216,8 @@ def _cmd_accounts_init(args: argparse.Namespace) -> int:
     if not pda_mode:
         if args.vm_seed is not None:
             raise ValueError("--vm-seed is only valid for seeded account mode")
+        if args.entry_pc is not None:
+            raise ValueError("--entry-pc is only valid for seeded account mode")
         if args.authority is not None or args.authority_keypair is not None:
             raise ValueError("--authority/--authority-keypair are only valid for seeded account mode")
     if pda_mode and args.ram_count and args.ram_count > 14:
@@ -2231,6 +2236,17 @@ def _cmd_accounts_init(args: argparse.Namespace) -> int:
         "payer": args.payer or cfg.get("keypair_path"),
     }
 
+    entry_pc: int | None = args.entry_pc
+    if entry_pc is None and args.manifest:
+        manifest = load_manifest(args.manifest)
+        abi = manifest.get("abi") if isinstance(manifest, dict) else None
+        if isinstance(abi, dict) and isinstance(abi.get("entry"), int):
+            entry_pc = int(abi["entry"])
+    if pda_mode and entry_pc is None:
+        entry_pc = 0x4000
+    if entry_pc is not None and (entry_pc < 0 or entry_pc > 0xFFFF_FFFF):
+        raise ValueError("vm.entry must be within u32 range")
+
     vm_entry: dict[str, str | int] = {}
     if args.vm:
         vm_entry["pubkey"] = args.vm
@@ -2242,6 +2258,8 @@ def _cmd_accounts_init(args: argparse.Namespace) -> int:
         vm_entry["pubkey"] = "REPLACE_ME"
     if pda_mode:
         vm_entry["seed"] = args.vm_seed if args.vm_seed is not None else secrets.randbits(64)
+        if entry_pc is not None:
+            vm_entry["entry"] = entry_pc
         vm_entry["account_model"] = "seeded"
         if args.authority:
             vm_entry["authority"] = args.authority
@@ -2305,6 +2323,7 @@ def _cmd_accounts_show(args: argparse.Namespace) -> int:
     cluster = accounts.get("cluster") if isinstance(accounts.get("cluster"), dict) else {}
     vm = accounts.get("vm") if isinstance(accounts.get("vm"), dict) else {}
     vm_seed: int | None = None
+    vm_entry_pc: int | None = None
     vm_pubkey = resolve_pubkey(vm)
     mapped_lines: list[str] = []
     derived_error: str | None = None
@@ -2312,6 +2331,13 @@ def _cmd_accounts_show(args: argparse.Namespace) -> int:
         vm_seed = parse_vm_seed(vm)
     except Exception as exc:
         derived_error = f"invalid vm.seed: {exc}"
+    try:
+        vm_entry_pc = parse_vm_entry(vm)
+    except Exception as exc:
+        if derived_error:
+            derived_error = f"{derived_error}; invalid vm.entry: {exc}"
+        else:
+            derived_error = f"invalid vm.entry: {exc}"
     try:
         info, mapped_lines = _accounts_segment_metas(args.accounts)
         vm_pubkey = info.get("vm_pubkey") or vm_pubkey
@@ -2333,6 +2359,8 @@ def _cmd_accounts_show(args: argparse.Namespace) -> int:
             print(f"  payer: {cluster['payer']}")
     if vm_seed is not None:
         print(f"  vm_seed: {vm_seed}")
+    if vm_entry_pc is not None:
+        print(f"  vm_entry: 0x{vm_entry_pc:X}")
     print(f"  vm: {vm_pubkey}")
 
     segments = parse_segments(accounts)
@@ -2723,6 +2751,8 @@ def _cmd_program_load(args: argparse.Namespace) -> int:
 
 
 def _cmd_invoke(args: argparse.Namespace) -> int:
+    mode = getattr(args, "mode", "fresh")
+    entry_pc_arg = getattr(args, "entry_pc", None)
     if args.fast:
         if args.program_path:
             raise ValueError("--fast cannot be combined with --program-path; remove --fast to load before invoke")
@@ -2757,6 +2787,31 @@ def _cmd_invoke(args: argparse.Namespace) -> int:
     mapped_path = Path(args.mapped_out) if args.mapped_out else Path("mapped_accounts.txt")
     mapped_path.write_text("\n".join(mapped_lines) + "\n")
     has_writable_mapped_segments = any(line.startswith("rw:") for line in mapped_lines)
+    seeded_mode = isinstance(info.get("vm_seed"), str) and bool(info.get("vm_seed"))
+
+    if mode not in {"fresh", "resume"}:
+        raise ValueError("--mode must be one of: fresh, resume")
+    if mode == "resume":
+        if args.program_path:
+            raise ValueError("--mode resume cannot be combined with --program-path")
+        if entry_pc_arg is not None:
+            raise ValueError("--entry-pc is only valid in --mode fresh")
+
+    entry_pc_value: int | None = None
+    if mode == "fresh" and seeded_mode:
+        if entry_pc_arg is not None:
+            if entry_pc_arg < 0 or entry_pc_arg > 0xFFFF_FFFF:
+                raise ValueError("--entry-pc must be within u32 range")
+            entry_pc_value = int(entry_pc_arg)
+        elif not args.program_path:
+            vm_entry = info.get("vm_entry")
+            if isinstance(vm_entry, str) and vm_entry:
+                entry_pc_value = int(vm_entry, 0)
+            else:
+                raise ValueError(
+                    "fresh invoke requires VM entry PC; set vm.entry in accounts file, pass --entry-pc, "
+                    "or provide --program-path"
+                )
 
     run_onchain = _resolve_run_onchain()
     payer_keypair = args.payer or (info.get("payer") if isinstance(info.get("payer"), str) else None)
@@ -2774,6 +2829,11 @@ def _cmd_invoke(args: argparse.Namespace) -> int:
         ]
     )
     _append_seeded_runner_args(cmd, args.accounts, info, payer_keypair=payer_keypair)
+    if seeded_mode:
+        if mode == "resume":
+            cmd.append("--resume")
+        elif entry_pc_value is not None:
+            cmd.extend(["--entry-pc", hex(entry_pc_value)])
     if args.ram_count is not None:
         cmd.extend(["--ram-count", str(args.ram_count)])
     elif has_writable_mapped_segments:
@@ -3121,6 +3181,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Use legacy non-seeded account placeholders (requires manual account pubkeys/keypairs)",
     )
     p_accounts_init.add_argument("--vm-seed", type=int, help="VM seed for deterministic mode (u64)")
+    p_accounts_init.add_argument(
+        "--entry-pc",
+        type=lambda raw: int(raw, 0),
+        help="VM entry PC for fresh seeded invoke mode (hex or decimal, default: abi.entry or 0x4000)",
+    )
     p_accounts_init.add_argument("--authority", help="Authority pubkey for deterministic derivation")
     p_accounts_init.add_argument(
         "--authority-keypair", help="Authority keypair for deterministic derivation"
@@ -3233,6 +3298,17 @@ def main(argv: list[str] | None = None) -> int:
     p_invoke.add_argument("--rpc-url", help="RPC URL override")
     p_invoke.add_argument("--program-id", help=argparse.SUPPRESS)
     p_invoke.add_argument("--payer", help="Payer keypair path")
+    p_invoke.add_argument(
+        "--mode",
+        choices=["fresh", "resume"],
+        default="fresh",
+        help="Execution mode (default: fresh restart for seeded-v3)",
+    )
+    p_invoke.add_argument(
+        "--entry-pc",
+        type=lambda raw: int(raw, 0),
+        help="Override entry PC for --mode fresh (hex or decimal)",
+    )
     p_invoke.add_argument("--instructions", type=int, default=50000)
     p_invoke.add_argument(
         "--ram-count",

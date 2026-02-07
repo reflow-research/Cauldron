@@ -46,8 +46,9 @@ cauldron accounts create --accounts frostbite-accounts.toml
 cauldron upload --file weights.bin --accounts frostbite-accounts.toml
 cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest
 
+# repeat this block for each inference
 cauldron input-write --manifest frostbite-model.toml --accounts frostbite-accounts.toml --data input.json
-cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 50000 --max-tx 10
+cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast --instructions 50000 --max-tx 10
 cauldron output --manifest frostbite-model.toml --accounts frostbite-accounts.toml
 ```
 
@@ -65,14 +66,14 @@ Wrapper script for this flow:
 Heavier templates (`cnn1d`, `tiny_cnn`) should use smaller slices:
 
 ```bash
-cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 10000 --max-tx 120
+cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast --instructions 10000 --max-tx 120
 ```
 
 Lighter templates (`linear`, `softmax`, `naive_bayes`, `mlp*`, `two_tower`,
 `tree`, `custom`) generally work with:
 
 ```bash
-cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 50000 --max-tx 10
+cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast --instructions 50000 --max-tx 10
 ```
 
 ## Account Lifecycle Commands
@@ -94,6 +95,8 @@ Or use:
 ## Important Notes
 
 - `cauldron invoke` auto-sets `--ram-count 0` when mapped writable segments are already present.
+- `cauldron invoke` defaults to seeded fresh-restart mode (`--mode fresh`).
+  Use `--mode resume` only when persistent runtime state is intentional.
 - Runner fallback temporary RAM defaults to `262144` bytes (`256 KiB`) per segment.
 - `cauldron upload` writes an RVCD v1 header into weights. Keep manifest
   `weights.header_format = "rvcd-v1"` and `data_offset = 12` where applicable.
@@ -101,6 +104,8 @@ Or use:
   unless `--allow-raw-upload` is set.
 - For JS/TOML workflows, quote large seeds:
   - `vm.seed = "1234567890123456789"`
+- For deterministic read-after-write on shared RPC endpoints:
+  - invoke with `--verbose`, confirm the execute signature as `finalized`, then read output.
 
 ## Template Input Shape Reminders
 

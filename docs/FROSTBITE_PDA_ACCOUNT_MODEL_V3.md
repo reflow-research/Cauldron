@@ -57,17 +57,26 @@ Total account size: `12 + payload_len` bytes.
 ```text
 40 = INIT_VM_SEEDED
 41 = INIT_SEGMENT_SEEDED
-42 = WRITE_SEGMENT_SEEDED
-43 = EXECUTE_SEEDED
-44 = RESET_SEEDED
-45 = LOAD_PROGRAM_SEEDED
+42 = LOAD_PROGRAM_V3
+43 = EXECUTE_V3
+44 = RESET_V3
+45 = WRITE_SEGMENT_SEEDED
 46 = CLEAR_SEGMENT_SEEDED
 47 = CLOSE_SEGMENT_SEEDED
 48 = CLOSE_VM_SEEDED
+49 = EXECUTE_RESTART_V3
 ```
 
 Legacy opcodes remain for backward compatibility, but new Cauldron flows default
 to seeded v3 operations.
+
+### Execute Modes
+
+- `EXECUTE_RESTART_V3` (`49`): fresh runtime restart. Resets VM runtime state,
+  sets PC to entry, then executes with seeded segment checks. This is the
+  Cauldron default for seeded account files.
+- `EXECUTE_V3` (`43`): resume mode. Continues from existing runtime state.
+  Use only when persistent execution state is intentional.
 
 ## Authority Model
 

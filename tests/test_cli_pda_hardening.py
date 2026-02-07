@@ -32,6 +32,7 @@ class CliPdaHardeningTests(unittest.TestCase):
             "pda": False,
             "legacy_accounts": False,
             "vm_seed": None,
+            "entry_pc": None,
             "authority": None,
             "authority_keypair": None,
             "vm": None,
@@ -129,6 +130,7 @@ class CliPdaHardeningTests(unittest.TestCase):
             text = out_path.read_text()
             self.assertIn("account_model = \"seeded\"", text)
             self.assertIn("seed = 42", text)
+            self.assertIn("entry = 0x4000", text)
             self.assertNotIn("pubkey = \"REPLACE_ME\"", text)
 
     def test_accounts_init_legacy_override_uses_placeholder_accounts(self) -> None:
@@ -822,6 +824,8 @@ class CliPdaHardeningTests(unittest.TestCase):
                 compute_limit=None,
                 max_tx=None,
                 mapped_out=str(mapped_out),
+                mode="fresh",
+                entry_pc=None,
                 fast=False,
                 no_simulate=False,
                 verbose=False,
@@ -831,6 +835,8 @@ class CliPdaHardeningTests(unittest.TestCase):
                 return_value=(
                     {
                         "vm_pubkey": "Vm11111111111111111111111111111111111111111",
+                        "vm_seed": "7",
+                        "vm_entry": "0x4000",
                         "rpc_url": "https://api.devnet.solana.com",
                         "program_id": "FRsToriMLgDc1Ud53ngzHUZvCRoazCaGeGUuzkwoha7m",
                         "payer": "/tmp/payer.json",
@@ -842,13 +848,103 @@ class CliPdaHardeningTests(unittest.TestCase):
                 ),
             ), patch(
                 "cauldron.cli._resolve_run_onchain", return_value="/tmp/frostbite-run-onchain"
-            ), patch("cauldron.cli.subprocess.run", return_value=Mock(returncode=0)) as run_mock:
+            ), patch("cauldron.cli.load_accounts", return_value={}), patch(
+                "cauldron.cli.subprocess.run", return_value=Mock(returncode=0)
+            ) as run_mock:
                 rc = _cmd_invoke(args)
 
             self.assertEqual(rc, 0)
             cmd = run_mock.call_args.kwargs["args"] if "args" in run_mock.call_args.kwargs else run_mock.call_args[0][0]
             self.assertIn("--ram-count", cmd)
             self.assertIn("0", cmd)
+            self.assertIn("--entry-pc", cmd)
+            self.assertIn("0x4000", cmd)
+            self.assertNotIn("--resume", cmd)
+
+    def test_invoke_seeded_resume_adds_resume_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            mapped_out = Path(td) / "mapped_accounts.txt"
+            args = argparse.Namespace(
+                accounts="/tmp/project/frostbite-accounts.toml",
+                program_path=None,
+                rpc_url=None,
+                program_id=None,
+                payer=None,
+                instructions=50000,
+                ram_count=None,
+                ram_bytes=None,
+                compute_limit=None,
+                max_tx=None,
+                mapped_out=str(mapped_out),
+                mode="resume",
+                entry_pc=None,
+                fast=False,
+                no_simulate=False,
+                verbose=False,
+            )
+            with patch(
+                "cauldron.cli._accounts_segment_metas",
+                return_value=(
+                    {
+                        "vm_pubkey": "Vm11111111111111111111111111111111111111111",
+                        "vm_seed": "7",
+                        "vm_entry": "0x4000",
+                        "rpc_url": "https://api.devnet.solana.com",
+                        "program_id": "FRsToriMLgDc1Ud53ngzHUZvCRoazCaGeGUuzkwoha7m",
+                        "payer": "/tmp/payer.json",
+                    },
+                    ["ro:Weight111111111111111111111111111111111111"],
+                ),
+            ), patch(
+                "cauldron.cli._resolve_run_onchain", return_value="/tmp/frostbite-run-onchain"
+            ), patch("cauldron.cli.load_accounts", return_value={}), patch(
+                "cauldron.cli.subprocess.run", return_value=Mock(returncode=0)
+            ) as run_mock:
+                rc = _cmd_invoke(args)
+
+            self.assertEqual(rc, 0)
+            cmd = run_mock.call_args.kwargs["args"] if "args" in run_mock.call_args.kwargs else run_mock.call_args[0][0]
+            self.assertIn("--resume", cmd)
+            self.assertNotIn("--entry-pc", cmd)
+
+    def test_invoke_seeded_fresh_requires_entry_without_program_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            mapped_out = Path(td) / "mapped_accounts.txt"
+            args = argparse.Namespace(
+                accounts="/tmp/project/frostbite-accounts.toml",
+                program_path=None,
+                rpc_url=None,
+                program_id=None,
+                payer=None,
+                instructions=50000,
+                ram_count=None,
+                ram_bytes=None,
+                compute_limit=None,
+                max_tx=None,
+                mapped_out=str(mapped_out),
+                mode="fresh",
+                entry_pc=None,
+                fast=False,
+                no_simulate=False,
+                verbose=False,
+            )
+            with patch(
+                "cauldron.cli._accounts_segment_metas",
+                return_value=(
+                    {
+                        "vm_pubkey": "Vm11111111111111111111111111111111111111111",
+                        "vm_seed": "7",
+                        "vm_entry": None,
+                        "rpc_url": "https://api.devnet.solana.com",
+                        "program_id": "FRsToriMLgDc1Ud53ngzHUZvCRoazCaGeGUuzkwoha7m",
+                        "payer": "/tmp/payer.json",
+                    },
+                    ["ro:Weight111111111111111111111111111111111111"],
+                ),
+            ), patch("cauldron.cli.subprocess.run") as run_mock:
+                with self.assertRaisesRegex(ValueError, "requires VM entry PC"):
+                    _cmd_invoke(args)
+            run_mock.assert_not_called()
 
     def test_invoke_rejects_fast_with_program_path(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -865,6 +961,8 @@ class CliPdaHardeningTests(unittest.TestCase):
                 compute_limit=None,
                 max_tx=None,
                 mapped_out=str(mapped_out),
+                mode="fresh",
+                entry_pc=None,
                 fast=True,
                 no_simulate=False,
                 verbose=False,

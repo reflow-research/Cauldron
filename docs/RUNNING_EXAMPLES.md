@@ -72,9 +72,13 @@ PY
 
 cauldron input-write --manifest frostbite-model.toml --accounts frostbite-accounts.toml --data input.json
 cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest
-cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 50000 --max-tx 10
+cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast --instructions 50000 --max-tx 10
 cauldron output --manifest frostbite-model.toml --accounts frostbite-accounts.toml
 ```
+
+For repeated inferences, keep the same VM/segments and only repeat
+`input-write -> invoke -> output`. In seeded mode, fresh execution is the
+default (`--mode fresh`) and does not require a VM clear between runs.
 
 ## Template invoke guidance
 
@@ -82,13 +86,13 @@ Use smaller instruction slices for heavier templates to avoid single-tx CU exhau
 
 ```bash
 # Recommended for cnn1d and tiny_cnn on devnet
-cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 10000 --max-tx 120
+cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast --instructions 10000 --max-tx 120
 ```
 
 Typical lighter templates (`linear`, `softmax`, `naive_bayes`, `mlp*`, `two_tower`, `tree`, `custom`) work with:
 
 ```bash
-cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 50000 --max-tx 10
+cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast --instructions 50000 --max-tx 10
 ```
 
 ## Cleanup (reclaim rent)
@@ -109,8 +113,12 @@ cauldron accounts close-vm --accounts frostbite-accounts.toml
   `--legacy-accounts` only for manual legacy account handling.
 - `cauldron invoke` auto-sets `--ram-count 0` when mapped `rw:` segments already
   exist in the accounts mapping.
+- `cauldron invoke` defaults to fresh seeded restart (`--mode fresh`).
+  Use `--mode resume` only when you intentionally need persistent runtime state.
 - If no writable mapped segment exists, runner fallback RAM defaults to `256 KiB`
   per temporary segment (override with `--ram-bytes`).
+- If output appears stale immediately after invoke on shared RPC, run invoke with
+  `--verbose`, confirm the execute signature at `finalized`, then read output.
 
 ## Troubleshooting
 
