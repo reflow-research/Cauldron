@@ -9,6 +9,11 @@ Prereqs:
 - Weights uploaded (for weights-backed models)
 - Input already written via `cauldron input-write`
 
+Invoke sizing note:
+- Start with `--instructions 50000` for most templates.
+- For `cnn1d` and `tiny_cnn`, prefer `--instructions 10000` with higher
+  `--max-tx` to avoid per-transaction CU exhaustion.
+
 ## JS/TS
 
 ```

@@ -1,52 +1,127 @@
 ---
 name: frostbite-cauldron
-description: Build, train, convert, and deploy Frostbite/Cauldron on-chain AI models on Solana, including manifest authoring, guest builds, weight packing/chunking/upload, devnet testing, and on-chain inference workflows. Use when asked about Cauldron CLI, frostbite-modelkit, Frostbite guest programs, or end-to-end on-chain inference setup.
+description: Build, train, convert, and deploy Frostbite/Cauldron on-chain AI models on Solana, including manifest authoring, guest builds, seeded deterministic account lifecycle, weight upload, and on-chain inference workflows.
 ---
 
 # Cauldron (Frostbite ModelKit)
 
 ## Scope
-- Use Cauldron CLI and SDKs to prepare models and run on-chain inference.
-- Keep training off-chain and inference on-chain.
-- Prefer devnet unless the user explicitly requests mainnet.
 
-## Standard workflow (CLI)
-1. Initialize a project: `cauldron init <dir> --template <template>`
-2. Train or export weights with your framework.
-3. Convert and pack: `cauldron convert --manifest frostbite-model.toml --input <weights> --pack`
-4. Build the guest program: `cauldron build-guest --manifest frostbite-model.toml`
-5. Chunk and upload: `cauldron chunk --manifest frostbite-model.toml`, then `cauldron upload --all "weights_chunk*.bin" --cluster devnet`
-6. Prepare accounts: `cauldron accounts init --manifest frostbite-model.toml` (or use shared devnet VM/RAM)
-7. Invoke inference: `cauldron input-write ...`, `cauldron invoke ...`, `cauldron output ...`
+Use this skill when asked about:
 
-Use `cauldron deploy --upload` when the user wants the combined pipeline.
-Use `cauldron validate` and `cauldron show` to sanity-check manifests before uploading.
+- Cauldron CLI flows (`init`, `convert`, `build-guest`, `upload`, `invoke`)
+- Frostbite account lifecycle and deterministic account mapping
+- On-chain inference testing on devnet
+- Template-specific model setup (`linear`, `mlp*`, `cnn1d`, `tiny_cnn`, `tree`, `custom`)
 
-## Templates and manifests
-- Keep the manifest in `frostbite-model.toml`.
-- Select a template that matches the model architecture: `linear`, `softmax`, `naive_bayes`, `mlp`, `mlp2`, `mlp3`, `cnn1d`, `tiny_cnn`, `two_tower`, `tree`, or `custom`.
-- Use `cauldron schema-hash --update-manifest` for custom schemas.
+## Canonical Workflow (Current)
 
-## Where to look for details
-- Open `README.md` for CLI overview, training notes, and weight layout examples.
-- Open `CAULDRON.md` for end-to-end flows, options, and devnet shared accounts.
-- Open `docs/RUNNING_EXAMPLES.md` for a devnet walkthrough.
-- Open `docs/FROSTBITE_MODEL_SPEC.md` for manifest/schema/weights format.
-- Open `docs/FROSTBITE_GUEST_CONTRACT.md` for guest ABI, entrypoint, and memory layout.
-- Open `sdk/` for JS/TS/Python/Rust usage patterns.
-- Open `gatekeeper/README.md` when the user wants the on-chain gatekeeper example.
+1. Initialize:
 
-## Safety and devnet notes
-- Start on devnet and treat shared VM/RAM accounts as scratch space.
-- Do not store secrets or rely on persistence in shared accounts.
-- Use `cauldron invoke --dry-run` or Solana simulation before mainnet.
+```bash
+cauldron init <dir> --template <template>
+```
 
-## Troubleshooting
-- Add the RISC-V target when guest builds fail: `rustup target add riscv64imac-unknown-none-elf`.
-- Set `FROSTBITE_RUN_ONCHAIN` if the on-chain runner is not found.
-- Ensure weights header format matches the upload tool (see `CAULDRON.md`).
+2. Prepare weights + manifest:
 
-## Ask for missing context
-- Ask which cluster to target and the RPC URL if not provided.
-- Ask which template and schema shapes are required.
-- Ask which weights format is available (`json`, `npz`, `npy`, `pt`, `safetensors`).
+```bash
+cauldron convert --manifest frostbite-model.toml --input <weights> --pack
+```
+
+3. Build guest:
+
+```bash
+cauldron build-guest --manifest frostbite-model.toml
+```
+
+4. Initialize seeded deterministic accounts:
+
+```bash
+cauldron accounts init --manifest frostbite-model.toml --ram-count 1
+cauldron accounts create --accounts frostbite-accounts.toml
+```
+
+5. Upload weights:
+
+```bash
+cauldron upload --file weights.bin --accounts frostbite-accounts.toml
+```
+
+6. Load + run:
+
+```bash
+cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest
+cauldron input-write --manifest frostbite-model.toml --accounts frostbite-accounts.toml --data input.json
+cauldron invoke --accounts frostbite-accounts.toml --fast
+cauldron output --manifest frostbite-model.toml --accounts frostbite-accounts.toml
+```
+
+## Deterministic Account Model (Seeded v3)
+
+- Recommended workflow is seeded deterministic account derivation (`create_with_seed`).
+- `accounts init` uses this mode by default (or `vm.seed` in `frostbite-accounts.toml`).
+- Use `--legacy-accounts` only for manual non-seeded account mode.
+- `vm.seed` + authority determines VM address.
+- Segment address is derived from authority + `vm.seed` + kind + slot.
+- Segment slot constraints:
+  - `1` = weights
+  - `2..15` = RAM
+- `accounts init --ram-count` supports at most 14 RAM segments in seeded mode.
+
+Authority notes:
+
+- If authority differs from payer, set `vm.authority_keypair` explicitly.
+- Keep `frostbite-accounts.toml` as source of truth for `seed`, authority, slots.
+
+Lifecycle helpers:
+
+```bash
+cauldron accounts clear --accounts frostbite-accounts.toml --kind ram --slot 2 --offset 0 --length 0
+cauldron accounts close-segment --accounts frostbite-accounts.toml --kind ram --slot 2
+cauldron accounts close-segment --accounts frostbite-accounts.toml --kind weights --slot 1
+cauldron accounts close-vm --accounts frostbite-accounts.toml
+```
+
+## Invoke Guidance (Important)
+
+For heavier templates (`cnn1d`, `tiny_cnn`) use smaller slices:
+
+```bash
+cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 10000 --max-tx 120
+```
+
+For typical lighter templates (`linear`, `softmax`, `naive_bayes`, `mlp*`,
+`two_tower`, `tree`, `custom`) this is usually sufficient:
+
+```bash
+cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 50000 --max-tx 10
+```
+
+`cauldron invoke` auto-sets `--ram-count 0` when mapped `rw:` segments already
+exist.
+`cauldron upload` rejects source-format files (`.json`, `.npz`, `.pt`, etc.) by
+default; upload `weights.bin` or pass `--allow-raw-upload` explicitly.
+
+## Template Input Reminders
+
+- `cnn1d` (`time_series`): payload must be nested `window x features`.
+- `tiny_cnn` (`vector`): payload shape should match `input_shape` (for default
+  template: `28 x 28`).
+- `custom`: provide raw blob bytes (`--input-bin`) or JSON payload bytes.
+
+## Docs to Open
+
+- `README.md`
+- `CAULDRON.md`
+- `docs/RUNNING_EXAMPLES.md`
+- `docs/FROSTBITE_MODEL_SPEC.md`
+- `docs/FROSTBITE_GUEST_CONTRACT.md`
+- `docs/FROSTBITE_PDA_ACCOUNT_MODEL_V1.md`
+- `examples/models/README.md`
+
+## Safety and Testing Expectations
+
+- Default to devnet unless user explicitly requests otherwise.
+- Validate with real on-chain transactions for release readiness.
+- Prefer deterministic seeded accounts for multi-user safety.
+- Reclaim rent after tests with `close-segment` and `close-vm`.

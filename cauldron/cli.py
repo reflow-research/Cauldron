@@ -7,6 +7,7 @@ import base64
 import json
 import os
 import platform
+import secrets
 import shutil
 import subprocess
 import sys
@@ -24,7 +25,17 @@ from .input import write_input, load_payload_from_path, pack_input
 from .guest import write_guest_config, build_guest
 from .chunk import chunk_manifest, chunk_file
 from .schema import schema_hash32, format_hash32, update_manifest_schema_hash
-from .accounts import load_accounts, write_accounts, parse_segments, resolve_pubkey
+from .accounts import (
+    load_accounts,
+    write_accounts,
+    parse_segments,
+    resolve_pubkey,
+    parse_vm_seed,
+    resolve_authority_pubkey,
+    segment_kind_code,
+    derive_vm_pda,
+    derive_segment_pda,
+)
 from .constants import MMU_VM_HEADER_SIZE, FBM1_MAGIC, ABI_VERSION, DTYPE_SIZES, DEFAULT_PROGRAM_ID
 
 _TEMPLATE_LINEAR = """
@@ -955,6 +966,7 @@ def _write_weights_placeholder(manifest: dict, dest: "Path") -> None:
     weights = manifest.get("weights")
     if not isinstance(weights, dict):
         return
+    layout = weights.get("layout")
     blobs = weights.get("blobs")
     if not isinstance(blobs, list):
         return
@@ -972,7 +984,15 @@ def _write_weights_placeholder(manifest: dict, dest: "Path") -> None:
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as f:
-            f.truncate(size_bytes)
+            # Tree placeholders need a valid leaf sentinel (feature < 0) at node 0.
+            # A zero-filled blob loops indefinitely in guest_tree and exits with ERR_SCHEMA.
+            if isinstance(layout, str) and layout.startswith("tree_") and (size_bytes % 20) == 0:
+                node_count = size_bytes // 20
+                node = struct.pack("<iiiii", -1, 0, -1, -1, 0)
+                for _ in range(node_count):
+                    f.write(node)
+            else:
+                f.truncate(size_bytes)
 
 
 def _find_template_dir(template: str) -> Path | None:
@@ -1242,61 +1262,239 @@ def _load_mapped_file(path: str, default_writable: bool) -> list[dict[str, str |
     return out
 
 
+def _resolve_accounts_path(accounts_path: str, raw_path: str) -> str:
+    candidate = Path(raw_path).expanduser()
+    if candidate.is_absolute():
+        return str(candidate)
+    return str((Path(accounts_path).resolve().parent / candidate).resolve())
+
+
+def _validate_vm_authority_binding(accounts_path: str, vm: dict[str, object]) -> None:
+    authority_raw = vm.get("authority")
+    authority_keypair_raw = vm.get("authority_keypair")
+    if not isinstance(authority_raw, str) or not authority_raw:
+        return
+    if not isinstance(authority_keypair_raw, str) or not authority_keypair_raw:
+        return
+
+    authority_keypair_pubkey = resolve_pubkey(
+        {"keypair": _resolve_accounts_path(accounts_path, authority_keypair_raw)}
+    )
+    if authority_keypair_pubkey and authority_keypair_pubkey != authority_raw:
+        raise ValueError(
+            "vm.authority does not match vm.authority_keypair pubkey; "
+            "update accounts file or signer path"
+        )
+
+
 def _apply_accounts_env(env: dict[str, str], accounts_path: str, require_weights_keypair: bool) -> dict[str, str]:
     accounts = load_accounts(accounts_path)
     cluster = accounts.get("cluster") if isinstance(accounts.get("cluster"), dict) else {}
     if isinstance(cluster.get("rpc_url"), str) and "FROSTBITE_RPC_URL" not in env:
         env["FROSTBITE_RPC_URL"] = cluster["rpc_url"]
     if isinstance(cluster.get("payer"), str) and "FROSTBITE_PAYER_KEYPAIR" not in env:
-        env["FROSTBITE_PAYER_KEYPAIR"] = cluster["payer"]
+        env["FROSTBITE_PAYER_KEYPAIR"] = _resolve_accounts_path(accounts_path, cluster["payer"])
     if "FROSTBITE_PROGRAM_ID" not in env:
         if isinstance(cluster.get("program_id"), str):
             env["FROSTBITE_PROGRAM_ID"] = cluster["program_id"]
         else:
             env["FROSTBITE_PROGRAM_ID"] = DEFAULT_PROGRAM_ID
 
+    vm = accounts.get("vm") if isinstance(accounts.get("vm"), dict) else {}
+    _validate_vm_authority_binding(accounts_path, vm)
+    authority_keypair_path: str | None = None
+    if isinstance(vm.get("authority_keypair"), str) and vm.get("authority_keypair"):
+        authority_keypair_path = _resolve_accounts_path(accounts_path, vm["authority_keypair"])
+        env["FROSTBITE_AUTHORITY_KEYPAIR"] = authority_keypair_path
+    if "FROSTBITE_PAYER_KEYPAIR" not in env:
+        if authority_keypair_path:
+            env["FROSTBITE_PAYER_KEYPAIR"] = authority_keypair_path
+
     segments = parse_segments(accounts)
-    weights = [seg for seg in segments if seg.kind == "weights"]
+    weights = [seg for seg in segments if seg.kind.strip().lower() == "weights"]
     if weights:
         if len(weights) > 1:
             raise ValueError("accounts file has multiple weights segments; single-account mode only")
         seg = weights[0]
+        legacy_env_override = env.get("FROSTBITE_CHUNK_KEYPAIR") or env.get("FROSTBITE_WEIGHTS_KEYPAIR")
+        vm_seed = parse_vm_seed(vm)
+        if vm_seed is not None:
+            if legacy_env_override:
+                raise ValueError(
+                    "vm.seed enables PDA mode; remove FROSTBITE_CHUNK_KEYPAIR/FROSTBITE_WEIGHTS_KEYPAIR override"
+                )
+            if seg.keypair:
+                raise ValueError(
+                    "vm.seed enables PDA mode; remove weights segment keypair and use derived PDA metadata"
+                )
+            program_id = env.get("FROSTBITE_PROGRAM_ID", DEFAULT_PROGRAM_ID)
+            authority_pubkey = resolve_authority_pubkey(
+                accounts,
+                authority_keypair_override=authority_keypair_path or env.get("FROSTBITE_PAYER_KEYPAIR"),
+            )
+            if not authority_pubkey:
+                raise ValueError(
+                    "PDA upload requires authority pubkey; set vm.authority, vm.authority_keypair, "
+                    "cluster.payer, or --payer"
+                )
+            payer_pubkey = None
+            if authority_keypair_path is None and "FROSTBITE_PAYER_KEYPAIR" in env:
+                payer_pubkey = resolve_pubkey({"keypair": env["FROSTBITE_PAYER_KEYPAIR"]})
+            if authority_keypair_path is None and payer_pubkey and authority_pubkey != payer_pubkey:
+                raise ValueError(
+                    "PDA upload authority differs from payer signer; set vm.authority_keypair "
+                    "or use --payer that matches vm.authority"
+                )
+            env["FROSTBITE_AUTHORITY_PUBKEY"] = authority_pubkey
+            env["FROSTBITE_UPLOAD_MODE"] = "pda"
+            env["FROSTBITE_VM_SEED"] = str(vm_seed)
+            env["FROSTBITE_SEGMENT_KIND"] = "weights"
+            if seg.slot != 1:
+                raise ValueError("PDA mode requires weights segment at slot 1")
+            env["FROSTBITE_SEGMENT_SLOT"] = str(seg.slot)
+            derived_vm_pubkey = derive_vm_pda(program_id, authority_pubkey, vm_seed)
+            configured_vm_pubkey = resolve_pubkey(vm)
+            if configured_vm_pubkey and configured_vm_pubkey != derived_vm_pubkey:
+                raise ValueError(
+                    "vm.pubkey does not match derived VM PDA for vm.seed/authority; "
+                    "remove vm.pubkey or fix vm.seed/authority"
+                )
+            env["FROSTBITE_VM_PUBKEY"] = derived_vm_pubkey
+
+            seg_pubkey = seg.pubkey or (
+                resolve_pubkey({"keypair": _resolve_accounts_path(accounts_path, seg.keypair)}) if seg.keypair else None
+            )
+            kind_code = segment_kind_code(seg.kind)
+            if kind_code is None:
+                raise ValueError("weights segment has unsupported kind metadata")
+            derived_segment_pubkey = derive_segment_pda(
+                program_id,
+                authority_pubkey,
+                vm_seed,
+                kind_code,
+                seg.slot,
+            )
+            if seg_pubkey and seg_pubkey != derived_segment_pubkey:
+                raise ValueError(
+                    "weights segment pubkey does not match derived PDA for vm.seed/authority/slot; "
+                    "remove segment pubkey/keypair or fix metadata"
+                )
+            env["FROSTBITE_SEGMENT_PUBKEY"] = derived_segment_pubkey
+            return env
+
+        if legacy_env_override:
+            return env
         if seg.keypair:
-            kp_path = Path(seg.keypair)
-            if not kp_path.is_absolute():
-                kp_path = Path(accounts_path).resolve().parent / kp_path
-            env["FROSTBITE_CHUNK_KEYPAIR"] = str(kp_path)
-        elif require_weights_keypair:
-            raise ValueError("weights segment requires keypair for upload")
+            env["FROSTBITE_CHUNK_KEYPAIR"] = _resolve_accounts_path(accounts_path, seg.keypair)
+            return env
+        if require_weights_keypair:
+            raise ValueError("weights segment requires keypair for legacy upload or vm.seed for PDA upload")
+    elif require_weights_keypair:
+        raise ValueError("accounts file missing weights segment")
     return env
 
 
-def _accounts_segment_metas(accounts_path: str) -> tuple[dict[str, str], list[str]]:
+def _accounts_segment_metas(
+    accounts_path: str,
+    *,
+    program_id_override: str | None = None,
+    payer_override: str | None = None,
+) -> tuple[dict[str, str | None], list[str]]:
     accounts = load_accounts(accounts_path)
     cluster = accounts.get("cluster") if isinstance(accounts.get("cluster"), dict) else {}
     vm = accounts.get("vm") if isinstance(accounts.get("vm"), dict) else {}
+    _validate_vm_authority_binding(accounts_path, vm)
+    program_id = program_id_override or (
+        cluster.get("program_id") if isinstance(cluster.get("program_id"), str) else DEFAULT_PROGRAM_ID
+    )
+    payer_keypair = payer_override
+    if not payer_keypair and isinstance(cluster.get("payer"), str):
+        payer_keypair = _resolve_accounts_path(accounts_path, cluster["payer"])
+    authority_override = payer_keypair
+    if isinstance(vm.get("authority_keypair"), str) and vm.get("authority_keypair"):
+        authority_override = _resolve_accounts_path(accounts_path, vm["authority_keypair"])
+
+    vm_seed = parse_vm_seed(vm)
+    authority_pubkey = resolve_authority_pubkey(accounts, authority_keypair_override=authority_override)
     vm_pubkey = resolve_pubkey(vm)
+    if vm_seed is not None:
+        if not authority_pubkey:
+            raise ValueError("Unable to derive VM PDA: missing authority pubkey")
+        expected_vm_pda = derive_vm_pda(program_id, authority_pubkey, vm_seed)
+        if vm_pubkey and vm_pubkey != expected_vm_pda:
+            raise ValueError(
+                "vm.pubkey does not match derived VM PDA for vm.seed/authority; "
+                "remove vm.pubkey or fix vm.seed/authority"
+            )
+        vm_pubkey = expected_vm_pda
     if not vm_pubkey:
-        raise ValueError("accounts file missing vm pubkey/keypair")
+        raise ValueError("accounts file missing vm pubkey/keypair (or vm.seed + authority)")
 
     segments = parse_segments(accounts)
     if not segments:
         raise ValueError("accounts file has no segments")
 
     # Return cluster info + ordered mapped account list (segment order)
-    mapped = []
+    mapped: list[tuple[int, bool, str]] = []
     for seg in segments:
-        pubkey = seg.pubkey or (resolve_pubkey({"keypair": seg.keypair}) if seg.keypair else None)
+        pubkey = seg.pubkey or (
+            resolve_pubkey({"keypair": _resolve_accounts_path(accounts_path, seg.keypair)}) if seg.keypair else None
+        )
+        if vm_seed is not None:
+            kind_code = segment_kind_code(seg.kind)
+            if kind_code is None:
+                raise ValueError(
+                    f"Unable to derive segment {seg.index}: unsupported kind '{seg.kind}' (expected weights|ram)"
+                )
+            if seg.slot == 1 and kind_code != 1:
+                raise ValueError("PDA mode requires a weights segment at slot 1")
+            if kind_code == 1 and seg.slot != 1:
+                raise ValueError("PDA mode supports weights only at slot 1")
+            if not (1 <= seg.slot <= 15):
+                raise ValueError(
+                    f"Unable to derive segment {seg.index}: slot {seg.slot} is out of range (1..15)"
+                )
+            expected_segment_pda = derive_segment_pda(program_id, authority_pubkey, vm_seed, kind_code, seg.slot)
+            if pubkey and pubkey != expected_segment_pda:
+                raise ValueError(
+                    f"segment {seg.index} pubkey does not match derived PDA for vm.seed/authority/slot; "
+                    "remove segment pubkey/keypair or fix metadata"
+                )
+            pubkey = expected_segment_pda
+            expected_writable = kind_code == 2  # weights=1 readonly, ram=2 writable
+            if seg.writable != expected_writable:
+                access_mode = "writable" if expected_writable else "readonly"
+                raise ValueError(
+                    f"segment {seg.index} ({seg.kind}) must be {access_mode} in PDA mode; "
+                    "fix segment writable metadata"
+                )
         if not pubkey:
-            raise ValueError(f"segment {seg.index} missing pubkey/keypair")
-        mapped.append((seg.index, seg.writable, pubkey))
+            raise ValueError(f"segment {seg.index} missing pubkey/keypair (or derivation metadata)")
+        sort_key = seg.slot if vm_seed is not None else seg.index
+        mapped.append((sort_key, seg.writable, pubkey))
     mapped.sort(key=lambda item: item[0])
+    if vm_seed is not None:
+        seen_slots: set[int] = set()
+        for slot, _, _ in mapped:
+            if slot in seen_slots:
+                raise ValueError(
+                    f"duplicate segment slot {slot} in PDA mode; each mapped account must use a unique slot"
+                )
+            seen_slots.add(slot)
+        for expected_slot, (actual_slot, _, _) in enumerate(mapped, start=1):
+            if actual_slot != expected_slot:
+                raise ValueError(
+                    "PDA execute requires contiguous segment slots starting at 1; "
+                    f"missing slot {expected_slot} before configured slot {actual_slot}"
+                )
 
     return {
         "rpc_url": cluster.get("rpc_url"),
-        "program_id": cluster.get("program_id"),
-        "payer": cluster.get("payer"),
+        "program_id": program_id,
+        "payer": payer_keypair or cluster.get("payer"),
         "vm_pubkey": vm_pubkey,
+        "authority_pubkey": authority_pubkey,
+        "vm_seed": str(vm_seed) if vm_seed is not None else None,
     }, [f"{'rw' if writable else 'ro'}:{pubkey}" for _, writable, pubkey in mapped]
 
 
@@ -1567,8 +1765,14 @@ def _cmd_input_write(args: argparse.Namespace) -> int:
         0,
     )
 
-    info, _ = _accounts_segment_metas(args.accounts)
-    vm_pubkey = info["vm_pubkey"]
+    info, _ = _accounts_segment_metas(
+        args.accounts,
+        program_id_override=args.program_id,
+        payer_override=args.payer,
+    )
+    vm_pubkey = info.get("vm_pubkey")
+    if not vm_pubkey:
+        raise ValueError("accounts file missing vm pubkey")
 
     env = os.environ.copy()
     if args.rpc_url:
@@ -1737,7 +1941,9 @@ def _cmd_output(args: argparse.Namespace) -> int:
 
     info, _ = _accounts_segment_metas(args.accounts)
     rpc_url = args.rpc_url or info.get("rpc_url") or "http://127.0.0.1:8899"
-    vm_pubkey = info["vm_pubkey"]
+    vm_pubkey = info.get("vm_pubkey")
+    if not vm_pubkey:
+        raise ValueError("accounts file missing vm pubkey")
 
     data = _fetch_account_data(rpc_url, vm_pubkey)
     if len(data) < MMU_VM_HEADER_SIZE:
@@ -1887,7 +2093,45 @@ def _build_upload_env(args: argparse.Namespace) -> dict[str, str]:
     return env
 
 
+_SOURCE_UPLOAD_SUFFIXES = {
+    ".json",
+    ".npz",
+    ".npy",
+    ".pt",
+    ".pth",
+    ".safetensors",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".csv",
+    ".txt",
+}
+
+
+def _validate_upload_inputs(args: argparse.Namespace) -> None:
+    if getattr(args, "allow_raw_upload", False):
+        return
+
+    if args.file:
+        suffix = Path(args.file).suffix.lower()
+        if suffix in _SOURCE_UPLOAD_SUFFIXES:
+            raise ValueError(
+                "upload expects a binary payload (for example weights.bin). "
+                "Convert first with `cauldron convert ... --pack`, then upload weights.bin. "
+                "Pass --allow-raw-upload to bypass this guard."
+            )
+
+    if args.all:
+        suffix = Path(args.all).suffix.lower()
+        if suffix in _SOURCE_UPLOAD_SUFFIXES:
+            raise ValueError(
+                "upload --all pattern appears to target source-format files. "
+                "Chunk/upload binary payloads instead. Pass --allow-raw-upload to bypass this guard."
+            )
+
+
 def _cmd_upload(args: argparse.Namespace) -> int:
+    _validate_upload_inputs(args)
     env = _build_upload_env(args)
     if args.accounts:
         env = _apply_accounts_env(env, args.accounts, require_weights_keypair=True)
@@ -1963,6 +2207,17 @@ def _cmd_deploy(args: argparse.Namespace) -> int:
 
 def _cmd_accounts_init(args: argparse.Namespace) -> int:
     cfg = _load_solana_cli_config()
+    pda_mode = not bool(getattr(args, "legacy_accounts", False))
+    if bool(getattr(args, "pda", False)) and not pda_mode:
+        raise ValueError("--pda and --legacy-accounts are mutually exclusive")
+    if not pda_mode:
+        if args.vm_seed is not None:
+            raise ValueError("--vm-seed is only valid for seeded account mode")
+        if args.authority is not None or args.authority_keypair is not None:
+            raise ValueError("--authority/--authority-keypair are only valid for seeded account mode")
+    if pda_mode and args.ram_count and args.ram_count > 14:
+        raise ValueError("PDA mode supports at most 14 RAM segments (slots 2..15)")
+
     out_path = Path(args.out) if args.out else None
     if out_path is None:
         if args.manifest:
@@ -1976,27 +2231,39 @@ def _cmd_accounts_init(args: argparse.Namespace) -> int:
         "payer": args.payer or cfg.get("keypair_path"),
     }
 
-    vm_entry: dict[str, str] = {}
+    vm_entry: dict[str, str | int] = {}
     if args.vm:
         vm_entry["pubkey"] = args.vm
     elif args.vm_keypair:
         vm_entry["keypair"] = args.vm_keypair
     elif args.vm_file:
         vm_entry["pubkey"] = _load_pubkey_file(args.vm_file)
-    else:
+    elif not pda_mode:
         vm_entry["pubkey"] = "REPLACE_ME"
+    if pda_mode:
+        vm_entry["seed"] = args.vm_seed if args.vm_seed is not None else secrets.randbits(64)
+        vm_entry["account_model"] = "seeded"
+        if args.authority:
+            vm_entry["authority"] = args.authority
+        elif args.authority_keypair:
+            vm_entry["authority_keypair"] = args.authority_keypair
 
     segments: list[dict[str, str | bool | int]] = []
-    weights_entry: dict[str, str | bool | int] = {"index": 1, "kind": "weights", "writable": False}
+    weights_entry: dict[str, str | bool | int] = {
+        "index": 1,
+        "slot": 1,
+        "kind": "weights",
+        "writable": False,
+    }
     if args.weights:
         weights_entry["pubkey"] = args.weights
     elif args.weights_keypair:
         weights_entry["keypair"] = args.weights_keypair
-    else:
+    elif not pda_mode:
         weights_entry["pubkey"] = "REPLACE_ME"
     segments.append(weights_entry)
 
-    ram_entries: list[dict[str, str | bool]] = []
+    ram_entries: list[dict[str, str | bool | int]] = []
     for ram in args.ram or []:
         ram_entries.append({"pubkey": ram, "writable": True})
     for ram_keypair in args.ram_keypair or []:
@@ -2005,14 +2272,26 @@ def _cmd_accounts_init(args: argparse.Namespace) -> int:
         ram_entries.extend(_load_mapped_file(args.ram_file, True))
     if args.ram_count:
         for _ in range(args.ram_count):
-            ram_entries.append({"pubkey": "REPLACE_ME", "writable": True})
+            if pda_mode:
+                ram_entries.append({"writable": True})
+            else:
+                ram_entries.append({"pubkey": "REPLACE_ME", "writable": True})
+    if pda_mode and len(ram_entries) > 14:
+        raise ValueError("PDA mode supports at most 14 RAM segments total (slots 2..15)")
 
     for idx, entry in enumerate(ram_entries, start=2):
-        segment = {"index": idx, "kind": "ram", "writable": bool(entry.get("writable", True))}
+        segment: dict[str, str | bool | int] = {
+            "index": idx,
+            "slot": idx,
+            "kind": "ram",
+            "writable": bool(entry.get("writable", True)),
+        }
         if "pubkey" in entry:
             segment["pubkey"] = entry["pubkey"]  # type: ignore[assignment]
         if "keypair" in entry:
             segment["keypair"] = entry["keypair"]  # type: ignore[assignment]
+        if isinstance(args.ram_bytes, int) and args.ram_bytes > 0:
+            segment["bytes"] = args.ram_bytes
         segments.append(segment)
 
     data = {"cluster": cluster, "vm": vm_entry, "segments": segments}
@@ -2025,7 +2304,24 @@ def _cmd_accounts_show(args: argparse.Namespace) -> int:
     accounts = load_accounts(args.accounts)
     cluster = accounts.get("cluster") if isinstance(accounts.get("cluster"), dict) else {}
     vm = accounts.get("vm") if isinstance(accounts.get("vm"), dict) else {}
-    vm_pubkey = resolve_pubkey(vm) or "<missing>"
+    vm_seed: int | None = None
+    vm_pubkey = resolve_pubkey(vm)
+    mapped_lines: list[str] = []
+    derived_error: str | None = None
+    try:
+        vm_seed = parse_vm_seed(vm)
+    except Exception as exc:
+        derived_error = f"invalid vm.seed: {exc}"
+    try:
+        info, mapped_lines = _accounts_segment_metas(args.accounts)
+        vm_pubkey = info.get("vm_pubkey") or vm_pubkey
+    except Exception as exc:
+        if derived_error:
+            derived_error = f"{derived_error}; {exc}"
+        else:
+            derived_error = str(exc)
+    if not vm_pubkey:
+        vm_pubkey = "<missing>"
 
     print("Accounts:")
     if cluster:
@@ -2035,6 +2331,8 @@ def _cmd_accounts_show(args: argparse.Namespace) -> int:
             print(f"  program_id: {cluster['program_id']}")
         if isinstance(cluster.get("payer"), str):
             print(f"  payer: {cluster['payer']}")
+    if vm_seed is not None:
+        print(f"  vm_seed: {vm_seed}")
     print(f"  vm: {vm_pubkey}")
 
     segments = parse_segments(accounts)
@@ -2042,25 +2340,26 @@ def _cmd_accounts_show(args: argparse.Namespace) -> int:
         print("  segments: <none>")
         return 0
     print("  segments:")
-    for seg in segments:
-        pubkey = seg.pubkey or (resolve_pubkey({"keypair": seg.keypair}) if seg.keypair else None) or "<missing>"
+    sorted_segments = sorted(segments, key=lambda seg: seg.index)
+    for idx, seg in enumerate(sorted_segments):
+        pubkey = seg.pubkey or (
+            resolve_pubkey({"keypair": _resolve_accounts_path(args.accounts, seg.keypair)}) if seg.keypair else None
+        )
+        if not pubkey and idx < len(mapped_lines):
+            line = mapped_lines[idx]
+            if ":" in line:
+                pubkey = line.split(":", 1)[1].strip()
+        if not pubkey:
+            pubkey = "<missing>"
         mode = "rw" if seg.writable else "ro"
-        print(f"    seg {seg.index}: {seg.kind} {mode} {pubkey}")
+        print(f"    seg {seg.index} (slot {seg.slot}): {seg.kind} {mode} {pubkey}")
+    if derived_error:
+        print(f"  note: {derived_error}")
     return 0
 
 
 def _cmd_accounts_export(args: argparse.Namespace) -> int:
-    accounts = load_accounts(args.accounts)
-    segments = parse_segments(accounts)
-    if not segments:
-        raise ValueError("accounts file has no segments")
-    lines = []
-    for seg in segments:
-        prefix = "rw:" if seg.writable else "ro:"
-        pubkey = seg.pubkey or (resolve_pubkey({"keypair": seg.keypair}) if seg.keypair else None)
-        if not pubkey:
-            raise ValueError(f"segment {seg.index} missing pubkey")
-        lines.append(f"{prefix}{pubkey}")
+    _, lines = _accounts_segment_metas(args.accounts)
     out_path = Path(args.out) if args.out else Path("mapped_accounts.txt")
     out_path.write_text("\n".join(lines) + "\n")
     print(f"Wrote mapped accounts: {out_path}")
@@ -2069,7 +2368,14 @@ def _cmd_accounts_export(args: argparse.Namespace) -> int:
 
 def _cmd_accounts_create(args: argparse.Namespace) -> int:
     accounts_path = args.accounts
-    info, mapped_lines = _accounts_segment_metas(accounts_path)
+    info, mapped_lines = _accounts_segment_metas(
+        accounts_path,
+        program_id_override=args.program_id,
+        payer_override=args.payer,
+    )
+    vm_seed = info.get("vm_seed")
+    if isinstance(vm_seed, str) and vm_seed:
+        return _cmd_accounts_create_pda(args, accounts_path, info, mapped_lines, int(vm_seed))
 
     env = os.environ.copy()
     if args.rpc_url:
@@ -2090,7 +2396,9 @@ def _cmd_accounts_create(args: argparse.Namespace) -> int:
     mapped_path = Path(args.mapped_out) if args.mapped_out else Path("mapped_accounts.txt")
     mapped_path.write_text("\n".join(mapped_lines) + "\n")
 
-    vm_pubkey = info["vm_pubkey"]
+    vm_pubkey = info.get("vm_pubkey")
+    if not vm_pubkey:
+        raise ValueError("accounts file missing vm pubkey")
     vm_file = args.vm_file or "frostbite_vm_accounts.txt"
     ram_file = args.ram_file or "frostbite_ram_accounts.txt"
 
@@ -2141,8 +2449,197 @@ def _cmd_accounts_create(args: argparse.Namespace) -> int:
     return proc.returncode
 
 
+def _cmd_accounts_create_pda(
+    args: argparse.Namespace,
+    accounts_path: str,
+    info: dict[str, str | None],
+    mapped_lines: list[str],
+    vm_seed: int,
+) -> int:
+    accounts = load_accounts(accounts_path)
+    vm = accounts.get("vm") if isinstance(accounts.get("vm"), dict) else {}
+    _validate_vm_authority_binding(accounts_path, vm)
+    segments = parse_segments(accounts)
+    default_ram_bytes = args.ram_bytes if isinstance(args.ram_bytes, int) and args.ram_bytes > 0 else 262_144
+
+    segment_specs: list[str] = []
+    for seg in segments:
+        kind = seg.kind.strip().lower()
+        if kind == "ram":
+            payload_bytes = seg.bytes if isinstance(seg.bytes, int) and seg.bytes > 0 else default_ram_bytes
+            segment_specs.append(f"ram:{seg.slot}:{payload_bytes}")
+            continue
+        if kind == "weights" and isinstance(seg.bytes, int) and seg.bytes > 0:
+            segment_specs.append(f"weights:{seg.slot}:{seg.bytes}")
+
+    env = os.environ.copy()
+    if args.rpc_url:
+        env["FROSTBITE_RPC_URL"] = args.rpc_url
+    elif isinstance(info.get("rpc_url"), str):
+        env["FROSTBITE_RPC_URL"] = info["rpc_url"]
+    if args.payer:
+        env["FROSTBITE_PAYER_KEYPAIR"] = args.payer
+    elif isinstance(info.get("payer"), str):
+        env["FROSTBITE_PAYER_KEYPAIR"] = info["payer"]
+    if args.program_id:
+        env["FROSTBITE_PROGRAM_ID"] = args.program_id
+    elif isinstance(info.get("program_id"), str):
+        env["FROSTBITE_PROGRAM_ID"] = info["program_id"]
+    elif "FROSTBITE_PROGRAM_ID" not in env:
+        env["FROSTBITE_PROGRAM_ID"] = DEFAULT_PROGRAM_ID
+
+    authority_keypair_path: str | None = None
+    if isinstance(vm.get("authority_keypair"), str) and vm.get("authority_keypair"):
+        authority_keypair_path = _resolve_accounts_path(accounts_path, vm["authority_keypair"])
+        env["FROSTBITE_AUTHORITY_KEYPAIR"] = authority_keypair_path
+    authority_pubkey = resolve_authority_pubkey(
+        accounts,
+        authority_keypair_override=authority_keypair_path or env.get("FROSTBITE_PAYER_KEYPAIR"),
+    )
+    if authority_pubkey:
+        env["FROSTBITE_AUTHORITY_PUBKEY"] = authority_pubkey
+    if authority_keypair_path is None and authority_pubkey and "FROSTBITE_PAYER_KEYPAIR" in env:
+        payer_pubkey = resolve_pubkey({"keypair": env["FROSTBITE_PAYER_KEYPAIR"]})
+        if payer_pubkey and payer_pubkey != authority_pubkey:
+            raise ValueError(
+                "PDA account creation authority differs from payer signer; set vm.authority_keypair "
+                "or use --payer that matches vm.authority"
+            )
+
+    mapped_path = Path(args.mapped_out) if args.mapped_out else Path("mapped_accounts.txt")
+    mapped_path.write_text("\n".join(mapped_lines) + "\n")
+
+    rust_tools = Path(__file__).resolve().parent / "rust_tools"
+    cmd = ["cargo", "run", "--bin", "init_pda_accounts", "--", "--vm-seed", str(vm_seed)]
+    for spec in segment_specs:
+        cmd.extend(["--segment", spec])
+
+    print("Running:", " ".join(cmd))
+    proc = subprocess.run(cmd, env=env, cwd=str(rust_tools))
+    return proc.returncode
+
+
+def _prepare_pda_ops_env(
+    accounts_path: str,
+    *,
+    rpc_url: str | None,
+    program_id: str | None,
+    payer: str | None,
+) -> tuple[dict[str, str], str]:
+    info, _ = _accounts_segment_metas(
+        accounts_path,
+        program_id_override=program_id,
+        payer_override=payer,
+    )
+    vm_seed = info.get("vm_seed")
+    if not isinstance(vm_seed, str) or not vm_seed:
+        raise ValueError("accounts operation requires vm.seed (PDA mode)")
+
+    env = os.environ.copy()
+    if rpc_url:
+        env["FROSTBITE_RPC_URL"] = rpc_url
+    elif info.get("rpc_url"):
+        env["FROSTBITE_RPC_URL"] = info["rpc_url"]
+    if payer:
+        env["FROSTBITE_PAYER_KEYPAIR"] = payer
+    elif info.get("payer"):
+        env["FROSTBITE_PAYER_KEYPAIR"] = info["payer"]
+    if program_id:
+        env["FROSTBITE_PROGRAM_ID"] = program_id
+    elif info.get("program_id"):
+        env["FROSTBITE_PROGRAM_ID"] = info["program_id"]
+    elif "FROSTBITE_PROGRAM_ID" not in env:
+        env["FROSTBITE_PROGRAM_ID"] = DEFAULT_PROGRAM_ID
+
+    env = _apply_accounts_env(env, accounts_path, require_weights_keypair=False)
+    return env, vm_seed
+
+
+def _run_pda_account_ops(env: dict[str, str], args: list[str]) -> int:
+    rust_tools = Path(__file__).resolve().parent / "rust_tools"
+    cmd = ["cargo", "run", "--bin", "pda_account_ops", "--", *args]
+    print("Running:", " ".join(cmd))
+    proc = subprocess.run(cmd, env=env, cwd=str(rust_tools))
+    return proc.returncode
+
+
+def _cmd_accounts_clear(args: argparse.Namespace) -> int:
+    if args.slot < 1 or args.slot > 15:
+        raise ValueError("slot must be in range 1..15")
+    if args.offset < 0:
+        raise ValueError("offset must be >= 0")
+    if args.length < 0:
+        raise ValueError("length must be >= 0")
+    if args.length == 0 and args.offset != 0:
+        raise ValueError("length=0 requires offset=0")
+
+    env, vm_seed = _prepare_pda_ops_env(
+        args.accounts,
+        rpc_url=args.rpc_url,
+        program_id=args.program_id,
+        payer=args.payer,
+    )
+    return _run_pda_account_ops(
+        env,
+        [
+            "clear-segment",
+            "--vm-seed",
+            vm_seed,
+            "--kind",
+            args.kind,
+            "--slot",
+            str(args.slot),
+            "--offset",
+            str(args.offset),
+            "--len",
+            str(args.length),
+        ],
+    )
+
+
+def _cmd_accounts_close_segment(args: argparse.Namespace) -> int:
+    if args.slot < 1 or args.slot > 15:
+        raise ValueError("slot must be in range 1..15")
+
+    env, vm_seed = _prepare_pda_ops_env(
+        args.accounts,
+        rpc_url=args.rpc_url,
+        program_id=args.program_id,
+        payer=args.payer,
+    )
+    cmd = [
+        "close-segment",
+        "--vm-seed",
+        vm_seed,
+        "--kind",
+        args.kind,
+        "--slot",
+        str(args.slot),
+    ]
+    if args.recipient:
+        cmd.extend(["--recipient", args.recipient])
+    return _run_pda_account_ops(env, cmd)
+
+
+def _cmd_accounts_close_vm(args: argparse.Namespace) -> int:
+    env, vm_seed = _prepare_pda_ops_env(
+        args.accounts,
+        rpc_url=args.rpc_url,
+        program_id=args.program_id,
+        payer=args.payer,
+    )
+    cmd = ["close-vm", "--vm-seed", vm_seed]
+    if args.recipient:
+        cmd.extend(["--recipient", args.recipient])
+    return _run_pda_account_ops(env, cmd)
+
+
 def _cmd_program_load(args: argparse.Namespace) -> int:
-    info, _ = _accounts_segment_metas(args.accounts)
+    info, _ = _accounts_segment_metas(
+        args.accounts,
+        program_id_override=args.program_id,
+        payer_override=args.payer,
+    )
 
     env = os.environ.copy()
     if args.rpc_url:
@@ -2160,12 +2657,16 @@ def _cmd_program_load(args: argparse.Namespace) -> int:
     elif "FROSTBITE_PROGRAM_ID" not in env:
         env["FROSTBITE_PROGRAM_ID"] = DEFAULT_PROGRAM_ID
 
+    vm_pubkey = info.get("vm_pubkey")
+    if not vm_pubkey:
+        raise ValueError("accounts file missing vm pubkey")
+
     run_onchain = _resolve_run_onchain()
     cmd = [
         run_onchain,
         args.program,
         "--vm",
-        info["vm_pubkey"],
+        vm_pubkey,
         "--load",
         "--load-only",
     ]
@@ -2199,7 +2700,11 @@ def _cmd_invoke(args: argparse.Namespace) -> int:
             args.program_path = None
         args.no_simulate = True
 
-    info, mapped_lines = _accounts_segment_metas(args.accounts)
+    info, mapped_lines = _accounts_segment_metas(
+        args.accounts,
+        program_id_override=args.program_id,
+        payer_override=args.payer,
+    )
 
     env = os.environ.copy()
     if args.rpc_url:
@@ -2217,8 +2722,13 @@ def _cmd_invoke(args: argparse.Namespace) -> int:
     elif "FROSTBITE_PROGRAM_ID" not in env:
         env["FROSTBITE_PROGRAM_ID"] = DEFAULT_PROGRAM_ID
 
+    vm_pubkey = info.get("vm_pubkey")
+    if not vm_pubkey:
+        raise ValueError("accounts file missing vm pubkey")
+
     mapped_path = Path(args.mapped_out) if args.mapped_out else Path("mapped_accounts.txt")
     mapped_path.write_text("\n".join(mapped_lines) + "\n")
+    has_writable_mapped_segments = any(line.startswith("rw:") for line in mapped_lines)
 
     run_onchain = _resolve_run_onchain()
     cmd = [run_onchain]
@@ -2227,13 +2737,19 @@ def _cmd_invoke(args: argparse.Namespace) -> int:
     cmd.extend(
         [
             "--vm",
-            info["vm_pubkey"],
+            vm_pubkey,
             "--mapped-file",
             str(mapped_path),
             "--instructions",
             str(args.instructions),
         ]
     )
+    if args.ram_count is not None:
+        cmd.extend(["--ram-count", str(args.ram_count)])
+    elif has_writable_mapped_segments:
+        cmd.extend(["--ram-count", "0"])
+    if args.ram_bytes is not None:
+        cmd.extend(["--ram-bytes", str(args.ram_bytes)])
     if args.compute_limit is not None:
         cmd.extend(["--compute-limit", str(args.compute_limit)])
     if args.max_tx is not None:
@@ -2494,6 +3010,11 @@ def main(argv: list[str] | None = None) -> int:
     p_upload.add_argument("--program-id", help=argparse.SUPPRESS)
     p_upload.add_argument("--accounts", help="Accounts file (frostbite-accounts.toml)")
     p_upload.add_argument(
+        "--allow-raw-upload",
+        action="store_true",
+        help="Bypass source-format upload guard (unsafe; advanced/debug only)",
+    )
+    p_upload.add_argument(
         "--extra-args",
         nargs=argparse.REMAINDER,
         help="Extra args passed to the Rust example",
@@ -2561,6 +3082,21 @@ def main(argv: list[str] | None = None) -> int:
     p_accounts_init.add_argument("--rpc-url", help="RPC URL override")
     p_accounts_init.add_argument("--program-id", help=argparse.SUPPRESS)
     p_accounts_init.add_argument("--payer", help="Payer keypair path")
+    p_accounts_init.add_argument(
+        "--pda",
+        action="store_true",
+        help="Seeded deterministic mode (default; kept for backwards compatibility)",
+    )
+    p_accounts_init.add_argument(
+        "--legacy-accounts",
+        action="store_true",
+        help="Use legacy non-seeded account placeholders (requires manual account pubkeys/keypairs)",
+    )
+    p_accounts_init.add_argument("--vm-seed", type=int, help="VM seed for deterministic mode (u64)")
+    p_accounts_init.add_argument("--authority", help="Authority pubkey for deterministic derivation")
+    p_accounts_init.add_argument(
+        "--authority-keypair", help="Authority keypair for deterministic derivation"
+    )
     p_accounts_init.add_argument("--vm", help="VM account pubkey")
     p_accounts_init.add_argument("--vm-keypair", help="VM account keypair path")
     p_accounts_init.add_argument("--vm-file", help="VM pubkey file (from frostbite-run-onchain)")
@@ -2570,6 +3106,7 @@ def main(argv: list[str] | None = None) -> int:
     p_accounts_init.add_argument("--ram-keypair", action="append", help="RAM account keypair path (repeatable)")
     p_accounts_init.add_argument("--ram-file", help="RAM accounts file (ro:/rw: format)")
     p_accounts_init.add_argument("--ram-count", type=int, help="Number of RAM segments to placeholder")
+    p_accounts_init.add_argument("--ram-bytes", type=int, help="Default RAM payload bytes in PDA mode")
     p_accounts_init.set_defaults(func=_cmd_accounts_init)
 
     p_accounts_show = p_accounts_sub.add_parser("show", help="Show account mapping")
@@ -2596,6 +3133,60 @@ def main(argv: list[str] | None = None) -> int:
     p_accounts_create.add_argument("--verbose", action="store_true")
     p_accounts_create.set_defaults(func=_cmd_accounts_create)
 
+    p_accounts_clear = p_accounts_sub.add_parser(
+        "clear", help="Clear bytes in a deterministic segment payload"
+    )
+    p_accounts_clear.add_argument("--accounts", required=True, help="Accounts file")
+    p_accounts_clear.add_argument(
+        "--kind", required=True, choices=["weights", "ram"], help="Segment kind"
+    )
+    p_accounts_clear.add_argument("--slot", required=True, type=int, help="Segment slot (1..15)")
+    p_accounts_clear.add_argument(
+        "--offset", type=int, default=0, help="Payload offset to clear from"
+    )
+    p_accounts_clear.add_argument(
+        "--length",
+        type=int,
+        default=0,
+        help="Bytes to clear (0 clears entire payload; requires offset=0)",
+    )
+    p_accounts_clear.add_argument("--rpc-url", help="RPC URL override")
+    p_accounts_clear.add_argument("--program-id", help=argparse.SUPPRESS)
+    p_accounts_clear.add_argument("--payer", help="Payer keypair path")
+    p_accounts_clear.set_defaults(func=_cmd_accounts_clear)
+
+    p_accounts_close_segment = p_accounts_sub.add_parser(
+        "close-segment", help="Close a deterministic segment and drain lamports"
+    )
+    p_accounts_close_segment.add_argument("--accounts", required=True, help="Accounts file")
+    p_accounts_close_segment.add_argument(
+        "--kind", required=True, choices=["weights", "ram"], help="Segment kind"
+    )
+    p_accounts_close_segment.add_argument(
+        "--slot", required=True, type=int, help="Segment slot (1..15)"
+    )
+    p_accounts_close_segment.add_argument(
+        "--recipient",
+        help="Recipient pubkey for drained lamports (default: payer)",
+    )
+    p_accounts_close_segment.add_argument("--rpc-url", help="RPC URL override")
+    p_accounts_close_segment.add_argument("--program-id", help=argparse.SUPPRESS)
+    p_accounts_close_segment.add_argument("--payer", help="Payer keypair path")
+    p_accounts_close_segment.set_defaults(func=_cmd_accounts_close_segment)
+
+    p_accounts_close_vm = p_accounts_sub.add_parser(
+        "close-vm", help="Close a deterministic VM account and drain lamports"
+    )
+    p_accounts_close_vm.add_argument("--accounts", required=True, help="Accounts file")
+    p_accounts_close_vm.add_argument(
+        "--recipient",
+        help="Recipient pubkey for drained lamports (default: payer)",
+    )
+    p_accounts_close_vm.add_argument("--rpc-url", help="RPC URL override")
+    p_accounts_close_vm.add_argument("--program-id", help=argparse.SUPPRESS)
+    p_accounts_close_vm.add_argument("--payer", help="Payer keypair path")
+    p_accounts_close_vm.set_defaults(func=_cmd_accounts_close_vm)
+
     p_program = sub.add_parser("program", help="Program helpers")
     p_program_sub = p_program.add_subparsers(dest="program_cmd", required=True)
 
@@ -2615,6 +3206,16 @@ def main(argv: list[str] | None = None) -> int:
     p_invoke.add_argument("--program-id", help=argparse.SUPPRESS)
     p_invoke.add_argument("--payer", help="Payer keypair path")
     p_invoke.add_argument("--instructions", type=int, default=50000)
+    p_invoke.add_argument(
+        "--ram-count",
+        type=int,
+        help="Override temp RAM account count (default auto: 0 when mapped writable segments exist)",
+    )
+    p_invoke.add_argument(
+        "--ram-bytes",
+        type=int,
+        help="Bytes per temp RAM account when temp RAM creation is enabled",
+    )
     p_invoke.add_argument("--compute-limit", type=int, help="Compute unit limit")
     p_invoke.add_argument("--max-tx", type=int, help="Maximum tx count")
     p_invoke.add_argument("--mapped-out", help="Mapped accounts file output")

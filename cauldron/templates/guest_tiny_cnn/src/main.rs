@@ -291,9 +291,12 @@ pub extern "C" fn rust_main() -> ! {
             sys_exit(ERR_SCHEMA);
         }
 
-        let conv_buf = scratch_addr(CONV_OFFSET);
-        let conv_out_elems = out_h * out_w * OUT_CHANNELS;
-        let pooled_ptr = conv_buf + (conv_out_elems * 4) as u64;
+        // Keep only pooled activations in scratch to avoid text overlap at 0x4000.
+        let pooled_ptr = scratch_addr(CONV_OFFSET);
+        if CONV_OFFSET + OUT_CHANNELS * 4 > 0x4000 {
+            write_u32(ctrl_base + CTRL_STATUS as u64, ERR_SCHEMA);
+            sys_exit(ERR_SCHEMA);
+        }
 
         let base = WEIGHTS_DATA_OFFSET + WEIGHTS_OFFSET;
         let w1_base = base;
@@ -304,6 +307,7 @@ pub extern "C" fn rust_main() -> ! {
 
         let mut oc = 0usize;
         while oc < OUT_CHANNELS {
+            let mut pooled_sum: i64 = 0;
             let mut oy = 0usize;
             while oy < out_h {
                 let mut ox = 0usize;
@@ -332,25 +336,13 @@ pub extern "C" fn rust_main() -> ! {
                     if acc < 0 {
                         acc = 0;
                     }
-                    let out_idx = oc * out_h * out_w + oy * out_w + ox;
-                    write_i32(conv_buf + (out_idx * 4) as u64, acc as i32);
+                    let acc_i32 = acc as i32;
+                    pooled_sum = pooled_sum.wrapping_add(acc_i32 as i64);
                     ox += 1;
                 }
                 oy += 1;
             }
-            oc += 1;
-        }
-
-        oc = 0;
-        while oc < OUT_CHANNELS {
-            let mut sum: i64 = 0;
-            let mut i = 0usize;
-            while i < out_h * out_w {
-                let idx = oc * out_h * out_w + i;
-                sum = sum.wrapping_add(read_i32(conv_buf + (idx * 4) as u64) as i64);
-                i += 1;
-            }
-            let avg = sum / (out_h * out_w) as i64;
+            let avg = pooled_sum / (out_h * out_w) as i64;
             write_i32(pooled_ptr + (oc * 4) as u64, avg as i32);
             oc += 1;
         }

@@ -1,32 +1,32 @@
 # Running Examples (Devnet)
 
-This is a minimal end-to-end flow for a linear model on devnet. Use it as a
-template for other manifests.
+This is a minimal end-to-end flow for a linear model on devnet using the
+current seeded deterministic account model.
 
 ## Prereqs
 - `frostbite-run-onchain` on PATH or set `FROSTBITE_RUN_ONCHAIN`
 - Payer keypair (default: `~/.config/solana/id.json`)
 - Solana CLI pointed at devnet (or pass `--rpc-url`)
 
-Note: keep `abi.entry >= 0x4000` so guest code does not overwrite the VM
+Note: keep `abi.entry >= 0x4000` so guest code does not overwrite VM
 header/control block. Templates already default to `0x4000`.
 
 ## 1) Create a project
 
-```
+```bash
 cauldron init demo-linear --template linear
 cd demo-linear
 ```
 
 Optional: swap in an example manifest (re-run `build-guest` after copying).
 
-```
+```bash
 cp ../examples/models/linear-liquidity.frostbite-model.toml frostbite-model.toml
 ```
 
-## 2) Create weights + build the guest
+## 2) Create weights + build guest
 
-```
+```bash
 python3 - <<'PY'
 import json
 w = [float(i % 8 - 4) for i in range(64)]
@@ -38,45 +38,32 @@ cauldron convert --manifest frostbite-model.toml --input weights.json --pack
 cauldron build-guest --manifest frostbite-model.toml
 ```
 
-## 3) Create VM + RAM accounts
+## 3) Create seeded VM/segment accounts
 
-Create a weights keypair (used by `cauldron upload`):
+Initialize deterministic account metadata (single weights + single RAM segment):
 
-```
-solana-keygen new --no-bip39-passphrase -o weights-keypair.json --force
-```
-
-Create VM + RAM via the on-chain runner:
-
-```
-export FROSTBITE_RUN_ONCHAIN=/path/to/frostbite-run-onchain  # if needed
-
-frostbite-run-onchain guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest \
-  --vm-save frostbite_vm_accounts.txt \
-  --ram-count 1 \
-  --ram-save frostbite_ram_accounts.txt \
-  --rpc https://api.devnet.solana.com \
-  --keypair ~/.config/solana/id.json \
-  --program-id FRsToriMLgDc1Ud53ngzHUZvCRoazCaGeGUuzkwoha7m \
-  --instructions 1 \
-  --no-simulate
-```
-
-Then build the accounts file:
-
-```
-cauldron accounts init --manifest frostbite-model.toml \
-  --vm-file frostbite_vm_accounts.txt \
-  --ram-file frostbite_ram_accounts.txt \
-  --weights-keypair weights-keypair.json \
+```bash
+cauldron accounts init --manifest frostbite-model.toml --ram-count 1 \
   --rpc-url https://api.devnet.solana.com \
   --payer ~/.config/solana/id.json \
   --program-id FRsToriMLgDc1Ud53ngzHUZvCRoazCaGeGUuzkwoha7m
 ```
 
-## 4) Upload weights, stage input, invoke
+Create the VM and segments on-chain from `frostbite-accounts.toml`:
 
+```bash
+cauldron accounts create --accounts frostbite-accounts.toml
 ```
+
+Inspect derived addresses:
+
+```bash
+cauldron accounts show --accounts frostbite-accounts.toml
+```
+
+## 4) Upload, stage input, invoke, read output
+
+```bash
 cauldron upload --file weights.bin --accounts frostbite-accounts.toml
 
 python3 - <<'PY'
@@ -85,15 +72,50 @@ json.dump(list(range(1, 65)), open("input.json", "w"))
 PY
 
 cauldron input-write --manifest frostbite-model.toml --accounts frostbite-accounts.toml --data input.json
-cauldron invoke --accounts frostbite-accounts.toml \
-  --program-path guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest \
-  --instructions 50000
-cauldron output --manifest frostbite-model.toml --accounts frostbite-accounts.toml --use-max
+cauldron program load --accounts frostbite-accounts.toml guest/target/riscv64imac-unknown-none-elf/release/frostbite-guest
+cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 50000 --max-tx 10
+cauldron output --manifest frostbite-model.toml --accounts frostbite-accounts.toml
 ```
+
+## Template invoke guidance
+
+Use smaller instruction slices for heavier templates to avoid single-tx CU exhaustion:
+
+```bash
+# Recommended for cnn1d and tiny_cnn on devnet
+cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 10000 --max-tx 120
+```
+
+Typical lighter templates (`linear`, `softmax`, `naive_bayes`, `mlp*`, `two_tower`, `tree`, `custom`) work with:
+
+```bash
+cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 50000 --max-tx 10
+```
+
+## Cleanup (reclaim rent)
+
+```bash
+cauldron accounts close-segment --accounts frostbite-accounts.toml --kind ram --slot 2
+cauldron accounts close-segment --accounts frostbite-accounts.toml --kind weights --slot 1
+cauldron accounts close-vm --accounts frostbite-accounts.toml
+```
+
+## Notes
+
+- `cauldron upload` writes an RVCD v1 header into the weights segment.
+  Ensure `weights.header_format = "rvcd-v1"` and `data_offset = 12` where used.
+- `cauldron upload` blocks source-format files (`weights.json`, `.npz`, `.pt`,
+  etc.) by default. Convert first, then upload `weights.bin`.
+- `cauldron accounts init` defaults to seeded deterministic mode; pass
+  `--legacy-accounts` only for manual legacy account handling.
+- `cauldron invoke` auto-sets `--ram-count 0` when mapped `rw:` segments already
+  exist in the accounts mapping.
+- If no writable mapped segment exists, runner fallback RAM defaults to `256 KiB`
+  per temporary segment (override with `--ram-bytes`).
 
 ## Troubleshooting
 
-- Invalid instruction or early halt: verify `abi.entry` is `0x4000` and rebuild
-  the guest (`cauldron build-guest`).
-- Runner not found: set `FROSTBITE_RUN_ONCHAIN` to the full path.
-- Empty output: use `--use-max` with `cauldron output` to read the full buffer.
+- `ProgramFailedToComplete` on first invoke: reduce per-tx slice (`--instructions 10000`) and retry.
+- `time_series window length mismatch` for `cnn1d`: provide a nested `window x features` JSON shape.
+- `ERR_SCHEMA` on tree templates with placeholder weights: regenerate with current `cauldron init` (tree placeholders now emit valid leaf nodes).
+- Runner not found: set `FROSTBITE_RUN_ONCHAIN` to the full binary path.
