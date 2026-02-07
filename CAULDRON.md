@@ -1,6 +1,10 @@
 # Cauldron SDK Guide
 
-Cauldron is the Frostbite model SDK + CLI for:
+Cauldron is the Frostbite model SDK + CLI for on-chain inference on Solana.
+This guide is the practical path for humans and agents shipping real devnet
+runs with deterministic seeded accounts.
+
+Core capabilities:
 
 - model manifest validation and patching
 - guest build for RISC-V (`rv64imac`)
@@ -47,6 +51,15 @@ cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 50000 -
 cauldron output --manifest frostbite-model.toml --accounts frostbite-accounts.toml
 ```
 
+Wrapper script for this flow:
+
+```bash
+./scripts/cauldron-devnet-fastpath.sh \
+  --manifest frostbite-model.toml \
+  --weights weights.json \
+  --input input.json
+```
+
 ## Invoke Presets
 
 Heavier templates (`cnn1d`, `tiny_cnn`) should use smaller slices:
@@ -70,6 +83,12 @@ cauldron accounts clear --accounts frostbite-accounts.toml --kind ram --slot 2 -
 cauldron accounts close-segment --accounts frostbite-accounts.toml --kind ram --slot 2
 cauldron accounts close-segment --accounts frostbite-accounts.toml --kind weights --slot 1
 cauldron accounts close-vm --accounts frostbite-accounts.toml
+```
+
+Or use:
+
+```bash
+./scripts/cauldron-seeded-cleanup.sh --accounts frostbite-accounts.toml
 ```
 
 ## Important Notes
@@ -97,6 +116,9 @@ As of 2026-02-07, all shipped templates passed seeded-account devnet E2E runs:
 - `mlp`, `mlp2`, `mlp3`
 - `cnn1d`, `tiny_cnn`, `tree`, `custom`
 
+Detailed semantic output checks are recorded in
+`docs/validation/devnet-semantic-2026-02-07.csv`.
+
 ## Troubleshooting
 
 - `ProgramFailedToComplete` on first invoke:
@@ -114,5 +136,5 @@ As of 2026-02-07, all shipped templates passed seeded-account devnet E2E runs:
 - `docs/RUNNING_EXAMPLES.md`
 - `docs/FROSTBITE_MODEL_SPEC.md`
 - `docs/FROSTBITE_GUEST_CONTRACT.md`
-- `docs/FROSTBITE_PDA_ACCOUNT_MODEL_V1.md`
+- `docs/FROSTBITE_PDA_ACCOUNT_MODEL_V3.md`
 - `examples/models/README.md`

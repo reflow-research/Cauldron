@@ -1,18 +1,30 @@
 # Cauldron (Frostbite ModelKit)
 
-Cauldron is the Frostbite model SDK + CLI for on-chain inference on Solana.
-It covers manifest authoring, guest template patching, RISC-V guest builds,
-weights conversion/packing, deterministic account lifecycle, upload, and invoke.
+Cauldron allows you to design, train, upload, and invoke AI models on the Solana blockchain.
 
-Inference executes on-chain in the same transaction context as your other
-program logic.
+Cauldron interfaces with the frostbite RISC-V computer to invoke small AI models at execution time 
+inside of a Solana transaction. Models invoked with cauldron have 0 latency for acting on data that is exposed to programs on Solana. This collapses the gap between off chain calculation and current Solana state. 
 
-This repo and the included docs are designed to work well with agentic tooling.
+Cauldron was designed to be used alongside agentic coding tools. Point your agents at `SKILL.md` in the repo root and they will be able to guide you through designing, training, uploading, and invoking your own model. Frostbite is currently live on devnet, so point your Solana CLI to devnet to use Cauldron on the devnet cluster.
+Use https://faucet.solana.com/ and connect your github to receive 10 devnet sol per 8 hours.  
 
-Vibe-friendly tooling for Frostbite model manifests, guest templates, and
-weights packaging.
+One of the key benefits of actual on-chain AI is that inference happens at execution time with any data that is exposed to a Solana program. You can train models
+that route dynamically, abort txns if toxic flow is detected, traverse and trim liquidity pool graphs, analyze pool depth and volume inflows, rebalance yield
+portfolios, and detect if a token is likely a rug or not; to name a few examples. There is really no limit to what you can do provided you respect Solana constraints.
 
-Both `cauldron` and `frostbite-modelkit` point to the same CLI entrypoint.
+As far as we know, we are the first to do legitimate on-chain AI inference. We are keen to explore where this can go. A new environment of verifiable, trustless,
+and financially meaningful AI is now upon us. PRs and contributions are welcome. We will be open sourcing the frostbite program in the future.
+
+
+## Why on-chain inference
+
+You can use inference at execution time for tasks like:
+- Guarding transactions when toxic flow is detected.
+- Routing based on current pool depth and liquidity conditions.
+- Real-time risk checks that must match the exact state used by the
+  transaction.
+
+Both `cauldron` and `frostbite-modelkit` map to the same CLI entrypoint.
 
 ## Quick start (dev)
 
@@ -37,6 +49,9 @@ seeded deterministic-account sweep (`11/11`):
 - `linear`, `softmax`, `naive_bayes`, `two_tower`
 - `mlp`, `mlp2`, `mlp3`
 - `cnn1d`, `tiny_cnn`, `tree`, `custom`
+
+Detailed semantic output checks are recorded in
+`docs/validation/devnet-semantic-2026-02-07.csv`.
 
 ## CLI
 
@@ -65,30 +80,27 @@ seeded deterministic-account sweep (`11/11`):
 - `cauldron output --manifest <manifest> --accounts frostbite-accounts.toml`
 
 Note: `accounts create`, `invoke`, and `program load` require the
-`frostbite-run-onchain` helper. Set `FROSTBITE_RUN_ONCHAIN` to its path, or
-place the binary in `cauldron/bin/<platform>/` or `cauldron/toolchain/bin/<platform>/`
-(auto-discovered). Otherwise it must be available on your PATH.
+`frostbite-run-onchain` helper. Cauldron auto-discovers vendored binaries from
+`cauldron/bin/<platform>/` and `cauldron/toolchain/bin/<platform>/` first.
+Set `FROSTBITE_RUN_ONCHAIN` to override this selection. If no vendored or
+override binary is available, the helper must be on your PATH.
 
-`cauldron invoke` disables temporary RAM account creation when your mapped
-accounts already include writable segments (`rw:` lines), unless you override
-with `--ram-count`.
+`cauldron invoke` automatically handles temporary RAM account creation.
+If you manage memory accounts manually (mapped `rw:` segments), temp RAM is
+suppressed by default; pass `--ram-count` to explicitly request it.
 
-`cauldron accounts init` now defaults to seeded deterministic accounts.
-Use `--legacy-accounts` only when you intentionally want manual legacy account
-management.
+`cauldron accounts init` now defaults to seeded deterministic accounts (v3 memory model).
+Use `--legacy-accounts` only when you intentionally want manual non-seeded
+account management.
 
 `frostbite-run-onchain` fallback RAM accounts default to `262144` bytes
 (`256 KiB`) per segment; override with `cauldron invoke --ram-bytes` when needed.
 
-This repo ships a prebuilt `frostbite-run-onchain` per platform
+This repo vendors a prebuilt `frostbite-run-onchain` per platform
 (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`, `windows-x64`). If it doesn’t run
 on your system, replace it and/or set `FROSTBITE_RUN_ONCHAIN`.
 
 **Note**
-
-If the vendored `frostbite-run-onchain` binary is older than your deployed
-program behavior, replace it with a freshly built runner and/or set
-`FROSTBITE_RUN_ONCHAIN` explicitly.
 
 Install-time selectors for packaging:
 - `scripts/select-runner.py` (pip / Python)
@@ -99,8 +111,17 @@ Release/staging helper (run on each platform):
 ./scripts/build-runner-binaries.sh
 ```
 
+GitHub cross-platform build + optional release:
+- Workflow: `.github/workflows/build-runners-and-release.yml`
+- Builds: `linux-x64`, `linux-arm64`, `darwin-x64`, `windows-x64`
+- Optional release creation: set `release_tag` in workflow inputs
+- Private Frostbite repo support: add `FROSTBITE_REPO_TOKEN` repo secret
+
+**Note**
+
 Runner build profile note: use `--no-default-features --features cli`
 for host binaries (`frostbite-run` / `frostbite-run-onchain`).
+Use this profile for host binaries to match the documented runner build path.
 
 Postinstall helpers:
 - pip: `cauldron-postinstall` (or `python -m cauldron.postinstall`)
@@ -109,19 +130,18 @@ Postinstall helpers:
 Packaging note: `MANIFEST.in` includes runner binaries, docs, and examples for
 sdist builds.
 
-The Frostbite program itself is pre-deployed (devnet v0). Cauldron defaults to
-the devnet program ID; override with `FROSTBITE_PROGRAM_ID` or in the accounts
-file if needed.
+The Frostbite program itself is pre-deployed (devnet). Cauldron defaults to
+the devnet program ID; override only if you intentionally target another deployment.
 
 By default `init` copies the full guest template. Use `--stub` to generate a
 minimal placeholder instead.
 
 If Cauldron is installed without bundled templates, `init` will fall back to a
-stub and emit a warning.
+stub and emit a warning. However, this is unlikely to happen. 
 
 `init` will also create `weights.bin` placeholder files from the
-manifest unless `--no-weights` is provided. Tree templates now emit valid
-leaf-node placeholders (not all-zero blobs).
+manifest unless `--no-weights` is provided. Tree templates emit valid
+leaf-node placeholders.
 
 ## Convert input format
 
@@ -166,6 +186,11 @@ CNN JSON example:
   "b2": [...]
 }
 ```
+
+**Note** 
+
+You must use `cauldron convert` on your weight files to convert them to a `.bin` file before uploading. Frostbite expects raw bytes on chain.
+
 For `cnn1d`, `w1` is shaped `[out_channels][in_channels][kernel]`.
 For `tiny_cnn`, `w1` is shaped `[out_channels][kernel][kernel]` (single-channel input).
 
@@ -184,7 +209,7 @@ For PyTorch or safetensors, use `--keymap` to map your state dict keys to
 ## Training harness
 
 The training harness is a starter that trains a small model, calibrates
-weights, and exports `weights.json` (and optionally `weights.bin`).
+weights, and exports `weights.bin` (and optionally, `weights.json`).
 
 Example (MLP):
 ```
@@ -232,7 +257,10 @@ cargo run --bin upload_model -- <chunk.bin>
 ```
 
 Cauldron can set `FROSTBITE_RPC_URL` and `FROSTBITE_PAYER_KEYPAIR` for the
-upload tool. The Frostbite program ID is preconfigured for devnet.
+upload tool. You do not need to pass either unless you want to override your
+default Solana CLI RPC URL or keypair.
+
+The Frostbite program ID is preconfigured for devnet.
 If no overrides are provided, it uses the Solana CLI config values.
 
 For single-account weights, you can upload the full `weights.bin` directly.
@@ -246,7 +274,10 @@ so guest code reads the correct weights offsets.
 default; upload the converted binary payload (`weights.bin`) instead.
 Use `--allow-raw-upload` only for explicit advanced/debug cases.
 If you do not specify RAM accounts, `invoke` will create a temporary RAM account
-for the run. Use `accounts init --ram-file` for persistent RAM mappings.
+for the run.
+
+*Use `accounts init --ram-count` for deterministic persistent RAM segments, or
+`accounts init --ram-file` to import an existing mapped RAM file.*
 
 ## SDK examples
 
@@ -262,7 +293,7 @@ in TOML (`vm.seed = "1234567890123456789"`) to avoid numeric precision loss.
 
 - `docs/FROSTBITE_MODEL_SPEC.md`
 - `docs/FROSTBITE_GUEST_CONTRACT.md`
-- `docs/FROSTBITE_PDA_ACCOUNT_MODEL_V1.md`
+- `docs/FROSTBITE_PDA_ACCOUNT_MODEL_V3.md`
 - `examples/models/`
 
 When installed via pip, the same files are bundled under
@@ -286,6 +317,9 @@ For custom schemas, pass `--input-bin` or provide `payload_hex`/
 ## Fast path (preload + invoke)
 
 Low-latency flow: preload guest + inputs, then invoke without upload delays.
+You will want to use a low-latency flow for HFT/MM strategies and other atomic actions.
+We recommend building a shell script to suit your needs once you have your model designed
+and uploaded. 
 
 ```bash
 cauldron accounts init --manifest frostbite-model.toml --ram-count 1
@@ -319,10 +353,25 @@ For heavier templates (`cnn1d`, `tiny_cnn`), use smaller slices:
 cauldron invoke --accounts frostbite-accounts.toml --fast --instructions 10000 --max-tx 120
 ```
 
+Scripted wrapper for this full flow:
+
+```bash
+./scripts/cauldron-devnet-fastpath.sh \
+  --manifest frostbite-model.toml \
+  --weights weights.json \
+  --input input.json
+```
+
 Recommended cleanup after tests:
 
 ```bash
 cauldron accounts close-segment --accounts frostbite-accounts.toml --kind ram --slot 2
 cauldron accounts close-segment --accounts frostbite-accounts.toml --kind weights --slot 1
 cauldron accounts close-vm --accounts frostbite-accounts.toml
+```
+
+Scripted cleanup (closes RAM/weights segments, then VM):
+
+```bash
+./scripts/cauldron-seeded-cleanup.sh --accounts frostbite-accounts.toml
 ```

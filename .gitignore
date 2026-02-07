@@ -13,3 +13,9 @@ garden
 node_modules
 .code
 .claude
+
+# Local dev artifacts
+.venv/
+*.egg-info/
+sdk/rust/target/
+docs/validation/logs/*.log

@@ -1,0 +1,12 @@
+template,status,detail,vm,primary_log
+linear,PASS,expected=12345 actual=12345,CQTYNZavPtmfzMbefQX1MZWBQGe3qntfQTvW5KjPSzd9,docs/validation/logs/semantic_linear_invoke.log
+softmax,PASS,expected~[32768,32768] actual=[32768,32768] sum=65536,CgYeVbtkTCaMMwaviJy2CFzitubUZiA4EYqJYQrg2zmd,docs/validation/logs/semantic_softmax_invoke.log
+naive_bayes,PASS,expected~[32768,32768] actual=[32768,32768] sum=65536,CN2owswd3nq5gFUGeqz9NKKJ4MHdiDNxXf9wxNwwPH7w,docs/validation/logs/semantic_naive_bayes_invoke.log
+two_tower,PASS,expected=1048576 actual=1048576,F5zUVxRdpE4xABmakdNnmieqGGaFA4mSvRMb8peg1Ypk,docs/validation/logs/semantic_two_tower_invoke.log
+mlp,PASS,expected=777 actual=777,9GdH6utgFGxBDMvf8oPYQb4BEjVUBdpsNqEfGZ3yMGFY,docs/validation/logs/semantic_mlp_invoke.log
+mlp2,PASS,expected=888 actual=888,741HicpwxqqFc8s3jvmx3ypE1D3NJyLWRbTbyafWWnio,docs/validation/logs/semantic_mlp2_invoke.log
+mlp3,PASS,expected=999 actual=999,8CJUhyBVSxh7s6XNB1PAxSNLFdyfjAwZNyNGXHu8264D,docs/validation/logs/semantic_mlp3_invoke.log
+cnn1d,PASS,expected=2222 actual=2222,hUMCnbPjminXpvq8Pm92Gsd5CSPxaHLV7unRaSRJjzi,docs/validation/logs/semantic_cnn1d_invoke.log
+tiny_cnn,PASS,expected=1111 actual=1111,3My3CdYwVsHVdG4vx5DDHBHXzaX6KB7goRedLB426ycE,docs/validation/logs/semantic_tiny_cnn_invoke.log
+tree,PASS,expected=5555 actual=5555,GCCYQhPByqymBWjPCTwcYHkZgEngwkZocLyPkJ9bX3wH,docs/validation/logs/semantic_tree_invoke.log
+custom,PASS,expected=checksum(1024x0x01)=0x00000400 actual=0x00000400,3sGmneEQ8bhNmAaQ46GUbDSYL6KL6ZHj5Lg4JiHLvN3v,docs/validation/logs/semantic_custom2_invoke.log

@@ -76,6 +76,10 @@ Allowed dtypes and byte widths:
 - "none" (default)
 - "rvcd-v1" (implies data_offset=12 if not specified)
 
+ModelKit upload helpers currently write RVCD v1 headers into weights accounts.
+If you use `cauldron upload`, set `weights.header_format = "rvcd-v1"` and
+either omit `data_offset` or set it to 12.
+
 ### segments.kind
 - "scratch"
 - "weights"

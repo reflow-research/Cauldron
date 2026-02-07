@@ -1,0 +1,16 @@
+Semantic validation summary
+- Main matrix script: local ad-hoc runner (not vendored)
+- Template logs: local runtime artifacts (not vendored)
+- Consolidated CSV: docs/validation/devnet-semantic-2026-02-07.csv
+
+Vendoring note:
+- `/tmp` paths from the original run were intentionally removed.
+- If you rerun validation, write logs under `docs/validation/logs/` or another repo-relative path.
+
+Note on custom template:
+- Initial matrix attempt failed due input size mismatch (64B provided vs input_blob_size=1024).
+- Corrected run used 1024-byte input and passed.
+
+Note on output_len=0 observations:
+- Immediate reads after invoke can return stale state on devnet.
+- Polling account state after invoke returned finalized non-zero output_len and expected outputs.

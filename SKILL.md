@@ -56,6 +56,15 @@ cauldron invoke --accounts frostbite-accounts.toml --fast
 cauldron output --manifest frostbite-model.toml --accounts frostbite-accounts.toml
 ```
 
+Shortcut wrapper:
+
+```bash
+./scripts/cauldron-devnet-fastpath.sh \
+  --manifest frostbite-model.toml \
+  --weights weights.json \
+  --input input.json
+```
+
 ## Deterministic Account Model (Seeded v3)
 
 - Recommended workflow is seeded deterministic account derivation (`create_with_seed`).
@@ -80,6 +89,12 @@ cauldron accounts clear --accounts frostbite-accounts.toml --kind ram --slot 2 -
 cauldron accounts close-segment --accounts frostbite-accounts.toml --kind ram --slot 2
 cauldron accounts close-segment --accounts frostbite-accounts.toml --kind weights --slot 1
 cauldron accounts close-vm --accounts frostbite-accounts.toml
+```
+
+Shortcut cleanup:
+
+```bash
+./scripts/cauldron-seeded-cleanup.sh --accounts frostbite-accounts.toml
 ```
 
 ## Invoke Guidance (Important)
@@ -116,7 +131,7 @@ default; upload `weights.bin` or pass `--allow-raw-upload` explicitly.
 - `docs/RUNNING_EXAMPLES.md`
 - `docs/FROSTBITE_MODEL_SPEC.md`
 - `docs/FROSTBITE_GUEST_CONTRACT.md`
-- `docs/FROSTBITE_PDA_ACCOUNT_MODEL_V1.md`
+- `docs/FROSTBITE_PDA_ACCOUNT_MODEL_V3.md`
 - `examples/models/README.md`
 
 ## Safety and Testing Expectations

@@ -45,8 +45,7 @@ Initialize deterministic account metadata (single weights + single RAM segment):
 ```bash
 cauldron accounts init --manifest frostbite-model.toml --ram-count 1 \
   --rpc-url https://api.devnet.solana.com \
-  --payer ~/.config/solana/id.json \
-  --program-id FRsToriMLgDc1Ud53ngzHUZvCRoazCaGeGUuzkwoha7m
+  --payer ~/.config/solana/id.json
 ```
 
 Create the VM and segments on-chain from `frostbite-accounts.toml`:
