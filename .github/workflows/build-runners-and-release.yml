@@ -59,21 +59,12 @@ jobs:
       - name: Checkout Cauldron
         uses: actions/checkout@v4
 
-      - name: Checkout Frostbite (custom token)
-        if: ${{ secrets.FROSTBITE_REPO_TOKEN != '' }}
+      - name: Checkout Frostbite
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.frostbite_repo }}
           ref: ${{ inputs.frostbite_ref }}
-          token: ${{ secrets.FROSTBITE_REPO_TOKEN }}
-          path: frostbite
-
-      - name: Checkout Frostbite (default token)
-        if: ${{ secrets.FROSTBITE_REPO_TOKEN == '' }}
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ inputs.frostbite_repo }}
-          ref: ${{ inputs.frostbite_ref }}
+          token: ${{ secrets.FROSTBITE_REPO_TOKEN || github.token }}
           path: frostbite
 
       - name: Setup Rust
