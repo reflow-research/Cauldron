@@ -120,11 +120,21 @@ jobs:
           path: dist
           merge-multiple: false
 
-      - name: Compute checksums
+      - name: Prepare release assets
         shell: bash
         run: |
           set -euo pipefail
-          find dist -type f -name 'frostbite-run-onchain*' -print0 | sort -z | xargs -0 sha256sum > dist/SHA256SUMS.txt
+          mkdir -p dist/release-assets
+          shopt -s nullglob
+          for runner_dir in dist/runner-*; do
+            platform="${runner_dir#dist/runner-}"
+            if [ -f "${runner_dir}/frostbite-run-onchain.exe" ]; then
+              cp -f "${runner_dir}/frostbite-run-onchain.exe" "dist/release-assets/frostbite-run-onchain-${platform}.exe"
+            elif [ -f "${runner_dir}/frostbite-run-onchain" ]; then
+              cp -f "${runner_dir}/frostbite-run-onchain" "dist/release-assets/frostbite-run-onchain-${platform}"
+            fi
+          done
+          sha256sum dist/release-assets/frostbite-run-onchain-* > dist/release-assets/SHA256SUMS.txt
 
       - name: Prepare release metadata
         id: meta
@@ -144,7 +154,7 @@ jobs:
             echo "- Frostbite ref: \`${{ inputs.frostbite_ref }}\`"
             echo
             echo "Artifacts:"
-            find dist -type f -name 'frostbite-run-onchain*' | sort | sed 's#^#- `#; s#$#`#'
+            find dist/release-assets -maxdepth 1 -type f -name 'frostbite-run-onchain*' | sort | sed 's#^#- `#; s#$#`#'
             echo
             echo "Checksums:"
             echo "- \`SHA256SUMS.txt\`"
@@ -159,5 +169,5 @@ jobs:
           draft: ${{ inputs.draft_release }}
           prerelease: ${{ inputs.prerelease }}
           files: |
-            dist/**/frostbite-run-onchain*
-            dist/SHA256SUMS.txt
+            dist/release-assets/frostbite-run-onchain-*
+            dist/release-assets/SHA256SUMS.txt
