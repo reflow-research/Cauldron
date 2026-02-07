@@ -2634,6 +2634,35 @@ def _cmd_accounts_close_vm(args: argparse.Namespace) -> int:
     return _run_pda_account_ops(env, cmd)
 
 
+def _append_seeded_runner_args(
+    cmd: list[str],
+    accounts_path: str,
+    info: dict[str, str | None],
+    *,
+    payer_keypair: str | None,
+) -> None:
+    vm_seed = info.get("vm_seed")
+    if not isinstance(vm_seed, str) or not vm_seed:
+        return
+
+    cmd.extend(["--vm-seed", vm_seed])
+
+    accounts = load_accounts(accounts_path)
+    vm = accounts.get("vm") if isinstance(accounts.get("vm"), dict) else {}
+    authority_keypair = vm.get("authority_keypair")
+    if isinstance(authority_keypair, str) and authority_keypair:
+        cmd.extend(["--authority-keypair", _resolve_accounts_path(accounts_path, authority_keypair)])
+        return
+
+    authority = vm.get("authority")
+    if isinstance(authority, str) and authority and payer_keypair:
+        payer_pubkey = resolve_pubkey({"keypair": payer_keypair})
+        if payer_pubkey and payer_pubkey != authority:
+            raise ValueError(
+                "seeded run requires vm.authority_keypair when vm.authority differs from payer signer"
+            )
+
+
 def _cmd_program_load(args: argparse.Namespace) -> int:
     info, _ = _accounts_segment_metas(
         args.accounts,
@@ -2662,6 +2691,7 @@ def _cmd_program_load(args: argparse.Namespace) -> int:
         raise ValueError("accounts file missing vm pubkey")
 
     run_onchain = _resolve_run_onchain()
+    payer_keypair = args.payer or (info.get("payer") if isinstance(info.get("payer"), str) else None)
     cmd = [
         run_onchain,
         args.program,
@@ -2670,15 +2700,14 @@ def _cmd_program_load(args: argparse.Namespace) -> int:
         "--load",
         "--load-only",
     ]
+    _append_seeded_runner_args(cmd, args.accounts, info, payer_keypair=payer_keypair)
 
     if args.rpc_url:
         cmd.extend(["--rpc", args.rpc_url])
     elif info.get("rpc_url"):
         cmd.extend(["--rpc", info["rpc_url"]])
-    if args.payer:
-        cmd.extend(["--keypair", args.payer])
-    elif info.get("payer"):
-        cmd.extend(["--keypair", info["payer"]])
+    if payer_keypair:
+        cmd.extend(["--keypair", payer_keypair])
     if args.program_id:
         cmd.extend(["--program-id", args.program_id])
     elif info.get("program_id"):
@@ -2696,8 +2725,7 @@ def _cmd_program_load(args: argparse.Namespace) -> int:
 def _cmd_invoke(args: argparse.Namespace) -> int:
     if args.fast:
         if args.program_path:
-            print("--fast ignores --program-path; program should already be loaded")
-            args.program_path = None
+            raise ValueError("--fast cannot be combined with --program-path; remove --fast to load before invoke")
         args.no_simulate = True
 
     info, mapped_lines = _accounts_segment_metas(
@@ -2731,6 +2759,7 @@ def _cmd_invoke(args: argparse.Namespace) -> int:
     has_writable_mapped_segments = any(line.startswith("rw:") for line in mapped_lines)
 
     run_onchain = _resolve_run_onchain()
+    payer_keypair = args.payer or (info.get("payer") if isinstance(info.get("payer"), str) else None)
     cmd = [run_onchain]
     if args.program_path:
         cmd.extend([args.program_path, "--load"])
@@ -2744,6 +2773,7 @@ def _cmd_invoke(args: argparse.Namespace) -> int:
             str(args.instructions),
         ]
     )
+    _append_seeded_runner_args(cmd, args.accounts, info, payer_keypair=payer_keypair)
     if args.ram_count is not None:
         cmd.extend(["--ram-count", str(args.ram_count)])
     elif has_writable_mapped_segments:
@@ -2758,10 +2788,8 @@ def _cmd_invoke(args: argparse.Namespace) -> int:
         cmd.extend(["--rpc", args.rpc_url])
     elif info.get("rpc_url"):
         cmd.extend(["--rpc", info["rpc_url"]])
-    if args.payer:
-        cmd.extend(["--keypair", args.payer])
-    elif info.get("payer"):
-        cmd.extend(["--keypair", info["payer"]])
+    if payer_keypair:
+        cmd.extend(["--keypair", payer_keypair])
     if args.program_id:
         cmd.extend(["--program-id", args.program_id])
     elif info.get("program_id"):

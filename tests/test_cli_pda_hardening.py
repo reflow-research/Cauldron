@@ -850,6 +850,30 @@ class CliPdaHardeningTests(unittest.TestCase):
             self.assertIn("--ram-count", cmd)
             self.assertIn("0", cmd)
 
+    def test_invoke_rejects_fast_with_program_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            mapped_out = Path(td) / "mapped_accounts.txt"
+            args = argparse.Namespace(
+                accounts="/tmp/project/frostbite-accounts.toml",
+                program_path="/tmp/guest.elf",
+                rpc_url=None,
+                program_id=None,
+                payer=None,
+                instructions=50000,
+                ram_count=None,
+                ram_bytes=None,
+                compute_limit=None,
+                max_tx=None,
+                mapped_out=str(mapped_out),
+                fast=True,
+                no_simulate=False,
+                verbose=False,
+            )
+            with patch("cauldron.cli.subprocess.run") as run_mock:
+                with self.assertRaises(ValueError):
+                    _cmd_invoke(args)
+            run_mock.assert_not_called()
+
     def test_invoke_keeps_default_ram_when_only_readonly_segments_mapped(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             mapped_out = Path(td) / "mapped_accounts.txt"
