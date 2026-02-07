@@ -117,8 +117,10 @@ cauldron accounts close-vm --accounts frostbite-accounts.toml
   Use `--mode resume` only when you intentionally need persistent runtime state.
 - If no writable mapped segment exists, runner fallback RAM defaults to `256 KiB`
   per temporary segment (override with `--ram-bytes`).
-- If output appears stale immediately after invoke on shared RPC, run invoke with
-  `--verbose`, confirm the execute signature at `finalized`, then read output.
+- If output appears stale immediately after invoke on shared RPC, use
+  signature-gated output reads:
+  - `cauldron invoke ... --sig-out .cauldron-last-exec.sig`
+  - `cauldron output ... --commitment finalized --after-signature-file .cauldron-last-exec.sig`
 
 ## Troubleshooting
 

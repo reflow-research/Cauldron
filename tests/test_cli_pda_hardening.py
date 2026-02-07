@@ -1,5 +1,6 @@
 import argparse
 import io
+import struct
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -17,6 +18,7 @@ from cauldron.cli import (
     _cmd_invoke,
     _cmd_upload,
     _cmd_accounts_show,
+    _cmd_output,
     _resolve_accounts_path,
 )
 
@@ -1055,6 +1057,147 @@ class CliPdaHardeningTests(unittest.TestCase):
             self.assertEqual(cmd[ram_count_idx + 1], "2")
             ram_bytes_idx = cmd.index("--ram-bytes")
             self.assertEqual(cmd[ram_bytes_idx + 1], "131072")
+
+    def test_invoke_sig_out_writes_last_execute_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            mapped_out = Path(td) / "mapped_accounts.txt"
+            sig_out = Path(td) / "last.sig"
+            args = argparse.Namespace(
+                accounts="/tmp/project/frostbite-accounts.toml",
+                program_path=None,
+                rpc_url=None,
+                program_id=None,
+                payer=None,
+                instructions=50000,
+                ram_count=None,
+                ram_bytes=None,
+                compute_limit=None,
+                max_tx=None,
+                mapped_out=str(mapped_out),
+                mode="fresh",
+                entry_pc=None,
+                sig_out=str(sig_out),
+                fast=False,
+                no_simulate=False,
+                verbose=False,
+            )
+            sig = "3MrCsZzhetPZ5PrdXgud47xouryY7UFjeZCSHezZCvi8GVSmhrhgGhko2Gkg825KMeazJ9jWtX6ZwMsqE8NVtvx3"
+            with patch(
+                "cauldron.cli._accounts_segment_metas",
+                return_value=(
+                    {
+                        "vm_pubkey": "Vm11111111111111111111111111111111111111111",
+                        "vm_seed": "7",
+                        "vm_entry": "0x4000",
+                        "rpc_url": "https://api.devnet.solana.com",
+                        "program_id": "FRsToriMLgDc1Ud53ngzHUZvCRoazCaGeGUuzkwoha7m",
+                        "payer": "/tmp/payer.json",
+                    },
+                    ["ro:Weight111111111111111111111111111111111111"],
+                ),
+            ), patch(
+                "cauldron.cli._resolve_run_onchain", return_value="/tmp/frostbite-run-onchain"
+            ), patch("cauldron.cli.load_accounts", return_value={}), patch(
+                "cauldron.cli.subprocess.run",
+                return_value=Mock(returncode=0, stdout=f"TX exec-1 sig: {sig}\n", stderr=""),
+            ) as run_mock:
+                rc = _cmd_invoke(args)
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(sig_out.read_text().strip(), sig)
+            run_kwargs = run_mock.call_args.kwargs
+            self.assertTrue(run_kwargs.get("capture_output"))
+            self.assertTrue(run_kwargs.get("text"))
+
+    def test_output_after_signature_uses_signature_slot_as_min_context(self) -> None:
+        args = argparse.Namespace(
+            manifest="/tmp/project/frostbite-model.toml",
+            accounts="/tmp/project/frostbite-accounts.toml",
+            rpc_url=None,
+            format="auto",
+            use_max=False,
+            commitment="finalized",
+            after_signature="5vocMqfs74ET1giL2kExMWNGDj2qMUeLLtLBo5E7FXqGiRB1KeRxq5hEJ8ZkthKLMGzGzJDLmJLz9T16MGNCkd8M",
+            after_signature_file=None,
+            min_context_slot=None,
+            wait_seconds=30.0,
+            poll_interval=0.5,
+            out=None,
+        )
+        vm_data = bytearray(545 + 0x2000 + 12)
+        struct.pack_into(
+            "<IIIIIIIIIIIIQ",
+            vm_data,
+            545,
+            0x314D4246,
+            1,
+            0,
+            0,
+            0x1000,
+            16,
+            0x2000,
+            12,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        struct.pack_into("<iii", vm_data, 545 + 0x2000, 10, 20, 30)
+        manifest = {
+            "abi": {
+                "control_offset": 0,
+                "input_offset": 0x1000,
+                "output_offset": 0x2000,
+                "output_max": 256,
+            },
+            "schema": {"type": "vector", "vector": {"output_dtype": "i32", "output_shape": [3]}},
+        }
+        with patch("cauldron.cli.load_manifest", return_value=manifest), patch(
+            "cauldron.cli._accounts_segment_metas",
+            return_value=({"vm_pubkey": "Vm11111111111111111111111111111111111111111", "rpc_url": "https://api.devnet.solana.com"}, []),
+        ), patch(
+            "cauldron.cli._wait_for_signature_slot", return_value=440487735
+        ) as wait_mock, patch(
+            "cauldron.cli._fetch_account_data", return_value=bytes(vm_data)
+        ) as fetch_mock:
+            with redirect_stdout(io.StringIO()):
+                rc = _cmd_output(args)
+        self.assertEqual(rc, 0)
+        wait_mock.assert_called_once()
+        fetch_mock.assert_called_once()
+        self.assertEqual(fetch_mock.call_args.kwargs["min_context_slot"], 440487735)
+        self.assertEqual(fetch_mock.call_args.kwargs["commitment"], "finalized")
+
+    def test_output_rejects_signature_and_signature_file_combo(self) -> None:
+        args = argparse.Namespace(
+            manifest="/tmp/project/frostbite-model.toml",
+            accounts="/tmp/project/frostbite-accounts.toml",
+            rpc_url=None,
+            format="auto",
+            use_max=False,
+            commitment="confirmed",
+            after_signature="abc",
+            after_signature_file="/tmp/sig.txt",
+            min_context_slot=None,
+            wait_seconds=30.0,
+            poll_interval=0.5,
+            out=None,
+        )
+        manifest = {
+            "abi": {
+                "control_offset": 0,
+                "input_offset": 0x1000,
+                "output_offset": 0x2000,
+                "output_max": 256,
+            }
+        }
+        with patch("cauldron.cli.load_manifest", return_value=manifest), patch(
+            "cauldron.cli._accounts_segment_metas",
+            return_value=({"vm_pubkey": "Vm11111111111111111111111111111111111111111"}, []),
+        ):
+            with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+                _cmd_output(args)
 
     def test_accounts_show_handles_invalid_vm_seed(self) -> None:
         args = argparse.Namespace(accounts="/tmp/project/frostbite-accounts.toml")

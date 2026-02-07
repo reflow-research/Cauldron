@@ -118,8 +118,9 @@ cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast --instruc
 exist.
 `cauldron invoke` defaults to seeded fresh-restart mode. Use `--mode resume`
 only when you intentionally want persistent VM runtime state.
-If output is read immediately after invoke on shared RPC, run invoke with
-`--verbose`, confirm the execute signature at `finalized`, then read output.
+If output is read immediately after invoke on shared RPC, use signature-gated
+reads: `cauldron invoke --sig-out <path>` then
+`cauldron output --after-signature-file <path> --commitment finalized`.
 `cauldron upload` rejects source-format files (`.json`, `.npz`, `.pt`, etc.) by
 default; upload `weights.bin` or pass `--allow-raw-upload` explicitly.
 

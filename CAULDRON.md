@@ -105,7 +105,7 @@ Or use:
 - For JS/TOML workflows, quote large seeds:
   - `vm.seed = "1234567890123456789"`
 - For deterministic read-after-write on shared RPC endpoints:
-  - invoke with `--verbose`, confirm the execute signature as `finalized`, then read output.
+  - invoke with `--sig-out <path>`, then read with `--after-signature-file <path>`.
 
 ## Template Input Shape Reminders
 

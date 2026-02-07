@@ -365,11 +365,13 @@ cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast --instruc
 ```
 
 If you are reading immediately after invoke on shared RPC endpoints, use
-`--verbose` on invoke and confirm the execution signature before reading:
+signature-gated output reads:
 
 ```bash
-solana confirm --url https://api.devnet.solana.com --commitment finalized <EXECUTE_SIGNATURE>
-cauldron output --manifest frostbite-model.toml --accounts frostbite-accounts.toml
+cauldron invoke --accounts frostbite-accounts.toml --mode fresh --fast \
+  --instructions 50000 --max-tx 10 --sig-out .cauldron-last-exec.sig
+cauldron output --manifest frostbite-model.toml --accounts frostbite-accounts.toml \
+  --commitment finalized --after-signature-file .cauldron-last-exec.sig
 ```
 
 Scripted wrapper for this full flow:

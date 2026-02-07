@@ -7,12 +7,15 @@ import base64
 import json
 import os
 import platform
+import re
 import secrets
 import shutil
 import subprocess
 import sys
 import struct
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -38,6 +41,9 @@ from .accounts import (
     derive_segment_pda,
 )
 from .constants import MMU_VM_HEADER_SIZE, FBM1_MAGIC, ABI_VERSION, DTYPE_SIZES, DEFAULT_PROGRAM_ID
+
+
+_EXEC_SIG_RE = re.compile(r"TX exec-\d+ sig:\s*([1-9A-HJ-NP-Za-km-z]+)")
 
 _TEMPLATE_LINEAR = """
 [model]
@@ -1820,31 +1826,125 @@ def _cmd_input_write(args: argparse.Namespace) -> int:
     return 0
 
 
-def _rpc_request(url: str, method: str, params: list) -> dict:
+def _rpc_request_raw(url: str, method: str, params: list) -> dict:
     payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req) as resp:
-        data = json.loads(resp.read().decode())
+    retries = 6
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            if exc.code in {429, 500, 502, 503, 504} and attempt < retries:
+                time.sleep(0.25 * (2**attempt))
+                continue
+            raise ValueError(f"RPC HTTP error {exc.code}: {exc.reason}") from exc
+        except urllib.error.URLError as exc:
+            if attempt < retries:
+                time.sleep(0.25 * (2**attempt))
+                continue
+            raise ValueError(f"RPC transport error: {exc}") from exc
+    raise ValueError("RPC request failed after retries")
+
+
+def _rpc_request(url: str, method: str, params: list) -> dict:
+    data = _rpc_request_raw(url, method, params)
     if "error" in data:
         raise ValueError(f"RPC error: {data['error']}")
     return data.get("result", {})
 
 
-def _fetch_account_data(rpc_url: str, pubkey: str) -> bytes:
-    result = _rpc_request(rpc_url, "getAccountInfo", [pubkey, {"encoding": "base64"}])
-    value = result.get("value") if isinstance(result, dict) else None
-    if value is None:
-        raise ValueError("Account not found")
-    data = value.get("data") if isinstance(value, dict) else None
-    if not data:
-        raise ValueError("Account data missing")
-    if isinstance(data, list) and data:
-        b64 = data[0]
-    elif isinstance(data, str):
-        b64 = data
-    else:
-        raise ValueError("Unexpected account data format")
-    return base64.b64decode(b64)
+def _commitment_satisfied(status: str | None, commitment: str) -> bool:
+    if commitment == "processed":
+        return status in {"processed", "confirmed", "finalized"}
+    if commitment == "confirmed":
+        return status in {"confirmed", "finalized"}
+    return status == "finalized"
+
+
+def _wait_for_signature_slot(
+    rpc_url: str,
+    signature: str,
+    commitment: str,
+    wait_seconds: float,
+    poll_interval: float,
+) -> int:
+    if wait_seconds < 0:
+        raise ValueError("--wait-seconds must be >= 0")
+    if poll_interval <= 0:
+        raise ValueError("--poll-interval must be > 0")
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        result = _rpc_request(
+            rpc_url,
+            "getSignatureStatuses",
+            [[signature], {"searchTransactionHistory": True}],
+        )
+        entries = result.get("value") if isinstance(result, dict) else None
+        entry = entries[0] if isinstance(entries, list) and entries else None
+        if isinstance(entry, dict):
+            err = entry.get("err")
+            if err is not None:
+                raise ValueError(f"Signature {signature} failed: {err}")
+            slot = entry.get("slot")
+            status = entry.get("confirmationStatus")
+            if isinstance(slot, int):
+                if commitment == "processed":
+                    return slot
+                if _commitment_satisfied(status, commitment):
+                    return slot
+        if time.monotonic() >= deadline:
+            raise ValueError(
+                f"Timed out waiting for signature {signature} to reach {commitment} commitment"
+            )
+        time.sleep(poll_interval)
+
+
+def _fetch_account_data(
+    rpc_url: str,
+    pubkey: str,
+    *,
+    commitment: str = "confirmed",
+    min_context_slot: int | None = None,
+    wait_seconds: float = 30.0,
+    poll_interval: float = 0.5,
+) -> bytes:
+    if wait_seconds < 0:
+        raise ValueError("--wait-seconds must be >= 0")
+    if poll_interval <= 0:
+        raise ValueError("--poll-interval must be > 0")
+    opts: dict[str, object] = {"encoding": "base64", "commitment": commitment}
+    if min_context_slot is not None:
+        if min_context_slot < 0:
+            raise ValueError("--min-context-slot must be >= 0")
+        opts["minContextSlot"] = min_context_slot
+
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        payload = _rpc_request_raw(rpc_url, "getAccountInfo", [pubkey, opts])
+        err = payload.get("error")
+        if err is not None:
+            code = err.get("code") if isinstance(err, dict) else None
+            # -32016: minimum context slot not reached yet
+            if min_context_slot is not None and code == -32016 and time.monotonic() < deadline:
+                time.sleep(poll_interval)
+                continue
+            raise ValueError(f"RPC error: {err}")
+
+        result = payload.get("result", {})
+        value = result.get("value") if isinstance(result, dict) else None
+        if value is None:
+            raise ValueError("Account not found")
+        data = value.get("data") if isinstance(value, dict) else None
+        if not data:
+            raise ValueError("Account data missing")
+        if isinstance(data, list) and data:
+            b64 = data[0]
+        elif isinstance(data, str):
+            b64 = data
+        else:
+            raise ValueError("Unexpected account data format")
+        return base64.b64decode(b64)
 
 
 def _parse_control_block(scratch: bytes, control_offset: int) -> dict[str, int]:
@@ -1948,7 +2048,38 @@ def _cmd_output(args: argparse.Namespace) -> int:
     if not vm_pubkey:
         raise ValueError("accounts file missing vm pubkey")
 
-    data = _fetch_account_data(rpc_url, vm_pubkey)
+    if args.after_signature and args.after_signature_file:
+        raise ValueError("--after-signature and --after-signature-file are mutually exclusive")
+
+    after_signature = args.after_signature
+    if args.after_signature_file:
+        sig_text = Path(args.after_signature_file).read_text().strip()
+        if not sig_text:
+            raise ValueError("signature file is empty")
+        after_signature = sig_text
+
+    min_context_slot = args.min_context_slot
+    if after_signature:
+        sig_slot = _wait_for_signature_slot(
+            rpc_url,
+            after_signature,
+            args.commitment,
+            args.wait_seconds,
+            args.poll_interval,
+        )
+        if min_context_slot is None:
+            min_context_slot = sig_slot
+        else:
+            min_context_slot = max(min_context_slot, sig_slot)
+
+    data = _fetch_account_data(
+        rpc_url,
+        vm_pubkey,
+        commitment=args.commitment,
+        min_context_slot=min_context_slot,
+        wait_seconds=args.wait_seconds,
+        poll_interval=args.poll_interval,
+    )
     if len(data) < MMU_VM_HEADER_SIZE:
         raise ValueError("VM account data too small")
     scratch = data[MMU_VM_HEADER_SIZE:]
@@ -1976,6 +2107,10 @@ def _cmd_output(args: argparse.Namespace) -> int:
     print("Output:")
     print(f"  rpc_url: {rpc_url}")
     print(f"  vm: {vm_pubkey}")
+    if min_context_slot is not None:
+        print(f"  min_context_slot: {min_context_slot}")
+    if after_signature:
+        print(f"  after_signature: {after_signature}")
     print(f"  status: {control.get('status', 0)}")
     print(f"  output_len: {output_len}")
     print(f"  input_ptr: 0x{control.get('input_ptr', 0):X}")
@@ -2750,9 +2885,17 @@ def _cmd_program_load(args: argparse.Namespace) -> int:
     return proc.returncode
 
 
+def _extract_last_execute_signature(output: str) -> str | None:
+    matches = _EXEC_SIG_RE.findall(output)
+    if not matches:
+        return None
+    return matches[-1]
+
+
 def _cmd_invoke(args: argparse.Namespace) -> int:
     mode = getattr(args, "mode", "fresh")
     entry_pc_arg = getattr(args, "entry_pc", None)
+    sig_out = getattr(args, "sig_out", None)
     if args.fast:
         if args.program_path:
             raise ValueError("--fast cannot be combined with --program-path; remove --fast to load before invoke")
@@ -2858,11 +3001,27 @@ def _cmd_invoke(args: argparse.Namespace) -> int:
         cmd.extend(["--program-id", DEFAULT_PROGRAM_ID])
     if args.no_simulate:
         cmd.append("--no-simulate")
-    if args.verbose:
+    if args.verbose or sig_out:
         cmd.append("--verbose")
 
     print("Running:", " ".join(cmd))
-    proc = subprocess.run(cmd, env=env)
+    if sig_out:
+        proc = subprocess.run(cmd, env=env, text=True, capture_output=True)
+        stdout_text = proc.stdout or ""
+        stderr_text = proc.stderr or ""
+        if stdout_text:
+            print(stdout_text, end="")
+        if stderr_text:
+            print(stderr_text, end="", file=sys.stderr)
+        last_sig = _extract_last_execute_signature(stdout_text + "\n" + stderr_text)
+        if last_sig:
+            sig_path = Path(sig_out)
+            sig_path.write_text(last_sig + "\n")
+            print(f"Wrote execute signature: {sig_path}")
+        else:
+            print("Warning: no execute signature found in runner output")
+    else:
+        proc = subprocess.run(cmd, env=env)
     return proc.returncode
 
 
@@ -3082,6 +3241,37 @@ def main(argv: list[str] | None = None) -> int:
     p_output.add_argument("--rpc-url", help="Override RPC URL")
     p_output.add_argument("--format", choices=["auto", "i32", "u32", "f32", "u8", "hex", "raw"], default="auto")
     p_output.add_argument("--use-max", action="store_true", help="Use abi.output_max when output_len is zero")
+    p_output.add_argument(
+        "--commitment",
+        choices=["processed", "confirmed", "finalized"],
+        default="confirmed",
+        help="RPC commitment level for account reads",
+    )
+    p_output.add_argument(
+        "--after-signature",
+        help="Wait for this execute signature to reach commitment and read at/after its slot",
+    )
+    p_output.add_argument(
+        "--after-signature-file",
+        help="Path to a file containing an execute signature (single line)",
+    )
+    p_output.add_argument(
+        "--min-context-slot",
+        type=int,
+        help="Require read context at or above this slot",
+    )
+    p_output.add_argument(
+        "--wait-seconds",
+        type=float,
+        default=30.0,
+        help="Max seconds to wait for signature/slot gating",
+    )
+    p_output.add_argument(
+        "--poll-interval",
+        type=float,
+        default=0.5,
+        help="Polling interval in seconds for signature/slot gating",
+    )
     p_output.add_argument("--out", help="Write raw output bytes to file")
     p_output.set_defaults(func=_cmd_output)
 
@@ -3323,6 +3513,10 @@ def main(argv: list[str] | None = None) -> int:
     p_invoke.add_argument("--compute-limit", type=int, help="Compute unit limit")
     p_invoke.add_argument("--max-tx", type=int, help="Maximum tx count")
     p_invoke.add_argument("--mapped-out", help="Mapped accounts file output")
+    p_invoke.add_argument(
+        "--sig-out",
+        help="Write last execute transaction signature to this file",
+    )
     p_invoke.add_argument("--fast", action="store_true", help="Skip preflight sim; assume program/input staged")
     p_invoke.add_argument("--no-simulate", action="store_true")
     p_invoke.add_argument("--verbose", action="store_true")
