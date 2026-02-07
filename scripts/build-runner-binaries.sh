@@ -40,6 +40,7 @@ platform_tag_from_target() {
     x86_64-apple-darwin) echo "darwin-x64" ;;
     aarch64-unknown-linux-gnu|aarch64-unknown-linux-musl) echo "linux-arm64" ;;
     x86_64-unknown-linux-gnu|x86_64-unknown-linux-musl) echo "linux-x64" ;;
+    x86_64-pc-windows-msvc|x86_64-pc-windows-gnu) echo "windows-x64" ;;
     *) echo "" ;;
   esac
 }
@@ -52,6 +53,7 @@ platform_tag_from_host() {
   case "$os" in
     Darwin) os="darwin" ;;
     Linux) os="linux" ;;
+    MINGW*|MSYS*|CYGWIN*) os="windows" ;;
     *) echo ""; return 0 ;;
   esac
   case "$arch" in
@@ -60,6 +62,22 @@ platform_tag_from_host() {
     *) echo ""; return 0 ;;
   esac
   echo "${os}-${arch}"
+}
+
+runner_name_from_target() {
+  case "$1" in
+    x86_64-pc-windows-msvc|x86_64-pc-windows-gnu) echo "frostbite-run-onchain.exe" ;;
+    *) echo "frostbite-run-onchain" ;;
+  esac
+}
+
+runner_name_from_host() {
+  local os
+  os=$(uname -s)
+  case "$os" in
+    MINGW*|MSYS*|CYGWIN*) echo "frostbite-run-onchain.exe" ;;
+    *) echo "frostbite-run-onchain" ;;
+  esac
 }
 
 PLATFORM_TAG=""
@@ -72,6 +90,11 @@ fi
 if [ -z "$PLATFORM_TAG" ]; then
   echo "Unsupported platform/target; set --target or OUT_DIR explicitly." >&2
   exit 1
+fi
+
+BIN_NAME=$(runner_name_from_host)
+if [ -n "$TARGET" ]; then
+  BIN_NAME=$(runner_name_from_target "$TARGET")
 fi
 
 if [ -z "$OUT_DIR" ]; then
@@ -89,9 +112,9 @@ echo "Building frostbite-run-onchain (${PLATFORM_TAG})"
   cargo build "${BUILD_ARGS[@]}"
 )
 
-BIN_SRC="${FROSTBITE_ROOT}/target/release/frostbite-run-onchain"
+BIN_SRC="${FROSTBITE_ROOT}/target/release/${BIN_NAME}"
 if [ -n "$TARGET" ]; then
-  BIN_SRC="${FROSTBITE_ROOT}/target/${TARGET}/release/frostbite-run-onchain"
+  BIN_SRC="${FROSTBITE_ROOT}/target/${TARGET}/release/${BIN_NAME}"
 fi
 
 if [ ! -f "$BIN_SRC" ]; then
@@ -100,6 +123,6 @@ if [ ! -f "$BIN_SRC" ]; then
 fi
 
 mkdir -p "$OUT_DIR"
-cp -f "$BIN_SRC" "$OUT_DIR/frostbite-run-onchain"
+cp -f "$BIN_SRC" "$OUT_DIR/${BIN_NAME}"
 
-echo "Staged: $OUT_DIR/frostbite-run-onchain"
+echo "Staged: $OUT_DIR/${BIN_NAME}"

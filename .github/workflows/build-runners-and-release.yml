@@ -1,0 +1,172 @@
+name: Build Runner Binaries And Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      frostbite_repo:
+        description: "Frostbite repository (owner/name)"
+        required: true
+        default: "reflow-research/frostbite"
+      frostbite_ref:
+        description: "Frostbite ref (branch/tag/SHA)"
+        required: true
+        default: "main"
+      release_tag:
+        description: "Optional tag to create/update release (leave empty to skip release)"
+        required: false
+        default: ""
+      release_name:
+        description: "Optional release title (defaults to release_tag)"
+        required: false
+        default: ""
+      draft_release:
+        description: "Create release as draft"
+        required: true
+        type: boolean
+        default: true
+      prerelease:
+        description: "Mark release as prerelease"
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs_on: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_path: cauldron/bin/linux-x64/frostbite-run-onchain
+          - platform: linux-arm64
+            runs_on: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_path: cauldron/bin/linux-arm64/frostbite-run-onchain
+          - platform: darwin-x64
+            runs_on: macos-13
+            target: x86_64-apple-darwin
+            artifact_path: cauldron/bin/darwin-x64/frostbite-run-onchain
+          - platform: windows-x64
+            runs_on: windows-2022
+            target: x86_64-pc-windows-msvc
+            artifact_path: cauldron/bin/windows-x64/frostbite-run-onchain.exe
+
+    steps:
+      - name: Checkout Cauldron
+        uses: actions/checkout@v4
+
+      - name: Checkout Frostbite (custom token)
+        if: ${{ secrets.FROSTBITE_REPO_TOKEN != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.frostbite_repo }}
+          ref: ${{ inputs.frostbite_ref }}
+          token: ${{ secrets.FROSTBITE_REPO_TOKEN }}
+          path: frostbite
+
+      - name: Checkout Frostbite (default token)
+        if: ${{ secrets.FROSTBITE_REPO_TOKEN == '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.frostbite_repo }}
+          ref: ${{ inputs.frostbite_ref }}
+          path: frostbite
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install arm64 cross linker
+        if: ${{ matrix.target == 'aarch64-unknown-linux-gnu' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build frostbite-run-onchain
+        shell: bash
+        env:
+          FROSTBITE_REPO_ROOT: ${{ github.workspace }}/frostbite
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
+        run: |
+          set -euo pipefail
+          ./scripts/build-runner-binaries.sh --target "${{ matrix.target }}"
+
+      - name: Verify artifact exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "${{ matrix.artifact_path }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-${{ matrix.platform }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    if: ${{ inputs.release_tag != '' }}
+    runs-on: ubuntu-latest
+    needs: [build]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Cauldron
+        uses: actions/checkout@v4
+
+      - name: Download runner artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: runner-*
+          path: dist
+          merge-multiple: false
+
+      - name: Compute checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          find dist -type f -name 'frostbite-run-onchain*' -print0 | sort -z | xargs -0 sha256sum > dist/SHA256SUMS.txt
+
+      - name: Prepare release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_name="${{ inputs.release_name }}"
+          if [ -z "$release_name" ]; then
+            release_name="${{ inputs.release_tag }}"
+          fi
+          echo "release_name=$release_name" >> "$GITHUB_OUTPUT"
+          {
+            echo "Prebuilt multi-platform \`frostbite-run-onchain\` binaries."
+            echo
+            echo "Built from:"
+            echo "- Frostbite repo: \`${{ inputs.frostbite_repo }}\`"
+            echo "- Frostbite ref: \`${{ inputs.frostbite_ref }}\`"
+            echo
+            echo "Artifacts:"
+            find dist -type f -name 'frostbite-run-onchain*' | sort | sed 's#^#- `#; s#$#`#'
+            echo
+            echo "Checksums:"
+            echo "- \`SHA256SUMS.txt\`"
+          } > dist/RELEASE_NOTES.md
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          name: ${{ steps.meta.outputs.release_name }}
+          body_path: dist/RELEASE_NOTES.md
+          draft: ${{ inputs.draft_release }}
+          prerelease: ${{ inputs.prerelease }}
+          files: |
+            dist/**/frostbite-run-onchain*
+            dist/SHA256SUMS.txt
