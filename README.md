@@ -115,7 +115,6 @@ GitHub cross-platform build + optional release:
 - Workflow: `.github/workflows/build-runners-and-release.yml`
 - Builds: `linux-x64`, `linux-arm64`, `darwin-x64`, `windows-x64`
 - Optional release creation: set `release_tag` in workflow inputs
-- Private Frostbite repo support: add `FROSTBITE_REPO_TOKEN` repo secret
 
 **Note**
 
