@@ -148,12 +148,18 @@ seeded-v3 accounts (runtime reset + entry PC restart each run).
 Use `--mode resume` only when you intentionally want persistent VM execution
 state across invocations. Fresh mode does not require a VM clear transaction
 between inferences.
+For multi-transaction runs (`--max-tx > 1` or `--max-tx 0`), Cauldron executes
+the first slice in fresh-restart mode, then automatically continues remaining
+slices in resume mode within the same `invoke` call.
 
 `cauldron accounts init` now defaults to seeded deterministic accounts (v3 memory model).
 Use `--legacy-accounts` only when you intentionally want manual non-seeded
 account management.
 Seeded account files now include `vm.entry` (defaults to `abi.entry`, fallback
 `0x4000`) so fresh invocations do not require per-run program reload.
+For no-weights manifests (for example `custom`), seeded init/create also
+initializes slot-1 weights as a zero-length segment so execute mapping validates
+out of the box.
 
 `frostbite-run-onchain` fallback RAM accounts default to `262144` bytes
 (`256 KiB`) per segment; override with `cauldron invoke --ram-bytes` when needed.
