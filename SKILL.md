@@ -66,6 +66,28 @@ Shortcut wrapper:
   --input input.json
 ```
 
+## TUI Workflow (Wizard + Manual)
+
+Launch:
+
+```bash
+cauldron tui
+```
+
+Current behavior:
+
+- Mode picker offers `Wizard` (guided) and `Manual` (panel-based).
+- Manual mode panel order is `Models`, `Train`, `Weights`, `Accounts`, `Invoke`.
+- For new projects entering Manual directly, run `Models -> Initialize Project` first.
+- You can also run this from the command palette (`Ctrl+P`) via `Initialize Project`.
+
+Manual first-run sequence:
+
+1. `Models -> Initialize Project` (validates manifest + writes accounts config)
+2. `Accounts -> Create Accounts`
+3. `Weights` actions (convert/pack/chunk/upload as needed)
+4. `Invoke` actions (`input-write -> invoke -> output`)
+
 ## Deterministic Account Model (Seeded v3)
 
 - Recommended workflow is seeded deterministic account derivation (`create_with_seed`).

@@ -15,6 +15,58 @@ portfolios, and detect if a token is likely a rug or not; to name a few examples
 As far as we know, we are the first to do legitimate on-chain AI inference. We are keen to explore where this can go. A new environment of verifiable, trustless,
 and financially meaningful AI is now upon us. PRs and contributions are welcome. We will be open sourcing the frostbite program in the future.
 
+## TUI Release (Feb 2026)
+
+Cauldron now ships a production TUI via:
+
+```bash
+cauldron tui
+```
+
+Highlights:
+- Mode picker with both **Wizard** and **Manual** workflows.
+- Manual mode now has an explicit `Initialize Project` action in `Models` for brand-new projects.
+- Command palette (`Ctrl+P`) includes `Initialize Project` so setup can be triggered quickly.
+- Manual panel order is now: `Models`, `Train`, `Weights`, `Accounts`, `Invoke`.
+- Arrow-key and keyboard-first navigation is supported across home + manual flows.
+
+For first-run manual flow on a new project:
+1. Open `Models` and run `Initialize Project`.
+2. Open `Accounts` and run `Create Accounts`.
+3. Continue through `Weights` and `Invoke`.
+
+## Install globally from clone
+
+If you cloned this repo and want `cauldron` available from any directory, run:
+
+```bash
+./scripts/install-global.sh
+```
+
+This installs the package with `tui,train` extras using your user site-packages
+(`--user`) unless you are already inside a virtual environment.
+
+If `cauldron` is not found after install, add the reported script directory to
+your PATH, then restart your shell.
+
+To uninstall:
+
+```bash
+./scripts/uninstall-global.sh
+```
+
+Direct pip equivalent:
+
+```bash
+python3 -m pip install --user -e ".[tui,train]"
+```
+
+After install, run a quick environment check:
+
+```bash
+cauldron doctor
+```
+
 
 ## Why on-chain inference
 
@@ -56,6 +108,7 @@ Detailed semantic output checks are recorded in
 ## CLI
 
 - `cauldron init <dir> --template linear|softmax|naive_bayes|two_tower|mlp|mlp2|mlp3|cnn1d|tiny_cnn|tree|custom`
+- `cauldron doctor [--rpc-url <url>] [--payer <keypair.json>] [--program-id <pubkey>] [--skip-rpc]`
 - `cauldron validate <manifest>`
 - `cauldron show <manifest>`
 - `cauldron build-guest --manifest <manifest>`

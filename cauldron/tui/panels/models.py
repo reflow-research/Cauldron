@@ -4,23 +4,28 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from rich.markup import escape
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Button, Input, Static
 
 from ..commands import (
+    cmd_accounts_init,
     cmd_build_guest,
     cmd_program_load,
     cmd_schema_hash,
     cmd_show,
     cmd_validate,
 )
+from ..registry import register_project
 from ..runtime import resolve_runtime_context
 from ..widgets.command_list import CommandItem, CommandList
 
 
 _COMMANDS = [
+    CommandItem("Initialize Project", "initialize", "Validate manifest + generate accounts config"),
     CommandItem("Validate Manifest", "validate", "Check manifest against spec"),
     CommandItem("Show Manifest", "show", "Display manifest sections"),
     CommandItem("Build Guest", "build-guest", "Compile RISC-V guest program"),
@@ -68,7 +73,10 @@ class ModelsPanel(Widget):
                     yield Button("Upload Guest", id="btn-models-upload-guest", variant="primary")
                     yield Button("Cancel", id="btn-models-upload-cancel")
             with VerticalScroll(id="models-result-scroll"):
-                yield Static("", id="models-result")
+                yield Static(
+                    "[#8892a4]Select an action to begin. For new projects, run [#00ffcc]Initialize Project[/] first.[/]",
+                    id="models-result",
+                )
 
     def on_command_list_selected(self, event: CommandList.Selected) -> None:
         app_state = self.app.app_state  # type: ignore[attr-defined]
@@ -78,7 +86,9 @@ class ModelsPanel(Widget):
             return
 
         manifest = proj.manifest_path
-        if event.key == "validate":
+        if event.key == "initialize":
+            self.run_initialize_action()
+        elif event.key == "validate":
             self._hide_upload_form()
             self._run_validate(manifest)
         elif event.key == "show":
@@ -92,6 +102,15 @@ class ModelsPanel(Widget):
         elif event.key == "schema-hash":
             self._hide_upload_form()
             self._run_schema_hash(manifest)
+
+    def run_initialize_action(self) -> None:
+        app_state = self.app.app_state  # type: ignore[attr-defined]
+        proj = app_state.active_project
+        if not proj:
+            self._show_result("[#ff3366]No active project[/]")
+            return
+        self._hide_upload_form()
+        self._run_initialize(proj)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-models-upload-guest":
@@ -181,10 +200,10 @@ class ModelsPanel(Widget):
                 guest_path = proj.manifest_path.parent / guest_path
 
         if not guest_path.exists():
-            self._show_result(f"[#ff3366]Guest ELF not found: {guest_path}[/]")
+            self._show_result(f"[#ff3366]Guest ELF not found: {self._esc(guest_path)}[/]")
             return
 
-        self._show_result(f"[#ffaa00]Uploading guest program: {guest_path.name}...[/]")
+        self._show_result(f"[#ffaa00]Uploading guest program: {self._esc(guest_path.name)}...[/]")
         self._log_info(f"Uploading guest program: {guest_path.name}")
         runtime = resolve_runtime_context(proj)
         result = cmd_program_load(
@@ -195,32 +214,90 @@ class ModelsPanel(Widget):
             program_id=runtime.program_id,
         )
         if result.success:
-            lines = [f"[#39ff14]{result.message}[/]"]
+            lines = [f"[#39ff14]{self._esc(result.message)}[/]"]
             for line in result.logs:
-                lines.append(f"  [#8892a4]{line}[/]")
+                lines.append(f"  [#8892a4]{self._esc(line)}[/]")
             self._show_result("\n".join(lines))
             self._log_success(result.message)
             self._hide_upload_form()
         else:
-            lines = [f"[#ff3366]{result.message}[/]"]
+            lines = [f"[#ff3366]{self._esc(result.message)}[/]"]
             for line in result.logs:
-                lines.append(f"  [#8892a4]{line}[/]")
+                lines.append(f"  [#8892a4]{self._esc(line)}[/]")
             self._show_result("\n".join(lines))
             self._log_error(result.message)
 
     def _run_validate(self, manifest) -> None:
         result = cmd_validate(manifest)
         if result.success:
-            self._show_result(f"[#39ff14]{result.message}[/]")
+            self._show_result(f"[#39ff14]{self._esc(result.message)}[/]")
             self._log_success(result.message)
         else:
-            lines = [f"[#ff3366]{result.message}[/]"]
+            lines = [f"[#ff3366]{self._esc(result.message)}[/]"]
             for e in result.errors:
-                lines.append(f"  [#ff3366]-[/] {e}")
+                lines.append(f"  [#ff3366]-[/] {self._esc(e)}")
             self._show_result("\n".join(lines))
             self._log_error(result.message)
             for e in result.errors:
                 self._log_error(f"  {e}")
+
+    def _run_initialize(self, proj) -> None:
+        self._show_result("[#ffaa00]Initializing project...[/]")
+        self._log_info("Initializing project in manual mode...")
+
+        validate_result = cmd_validate(proj.manifest_path)
+        if not validate_result.success:
+            lines = [f"[#ff3366]{self._esc(validate_result.message)}[/]"]
+            for err in validate_result.errors:
+                lines.append(f"  [#ff3366]-[/] {self._esc(err)}")
+            self._show_result("\n".join(lines))
+            self._log_error(validate_result.message)
+            for err in validate_result.errors:
+                self._log_error(f"  {err}")
+            return
+
+        runtime = resolve_runtime_context(proj)
+        init_result = cmd_accounts_init(
+            manifest_path=proj.manifest_path,
+            rpc_url=runtime.rpc_url,
+            program_id=runtime.program_id,
+            payer=runtime.payer,
+            project_path=proj.path,
+        )
+        if not init_result.success:
+            self._show_result(f"[#ff3366]{self._esc(init_result.message)}[/]")
+            self._log_error(init_result.message)
+            return
+
+        path_str = init_result.data.get("path")
+        if isinstance(path_str, str) and path_str:
+            proj.accounts_path = Path(path_str)
+        proj.cluster = runtime.cluster
+        proj.rpc_url = runtime.rpc_url
+        proj.program_id = runtime.program_id
+        proj.payer = runtime.payer
+        proj.deployment_state = "accounts_init"
+        register_project(proj)
+
+        seed = init_result.data.get("vm_seed")
+        lines = [
+            "[#39ff14]Project initialized for manual flow[/]",
+            f"  [#8892a4]manifest:[/] {self._esc(proj.manifest_path)}",
+        ]
+        if path_str:
+            lines.append(f"  [#8892a4]accounts:[/] {self._esc(path_str)}")
+        if seed is not None:
+            lines.append(f"  [#8892a4]vm_seed:[/] {self._esc(seed)}")
+        lines.extend(
+            [
+                "",
+                "[#00ffcc]Next:[/]",
+                "  [#8892a4]1.[/] Go to [#00ffcc]Accounts[/] -> [#00ffcc]Create Accounts[/]",
+                "  [#8892a4]2.[/] Continue through [#00ffcc]Weights[/] and [#00ffcc]Invoke[/] panels",
+            ]
+        )
+        self._show_result("\n".join(lines))
+        self._log_success("Project initialized for manual mode")
 
     def _run_show(self, manifest) -> None:
         result = cmd_show(manifest)
@@ -231,29 +308,29 @@ class ModelsPanel(Widget):
                 data = manifest_data.get(section)
                 if not data:
                     continue
-                lines.append(f"[#00ffcc][{section}][/]")
+                lines.append(f"[#00ffcc]{self._esc(f'[{section}]')}[/]")
                 if isinstance(data, dict):
                     for k, v in data.items():
                         if isinstance(v, dict):
-                            lines.append(f"  [#8892a4]{k}:[/]")
+                            lines.append(f"  [#8892a4]{self._esc(k)}:[/]")
                             for dk, dv in v.items():
-                                lines.append(f"    [#555e6e]{dk}:[/] {dv}")
+                                lines.append(f"    [#555e6e]{self._esc(dk)}:[/] {self._esc(dv)}")
                         elif isinstance(v, list):
-                            lines.append(f"  [#8892a4]{k}:[/]")
+                            lines.append(f"  [#8892a4]{self._esc(k)}:[/]")
                             for i, item in enumerate(v):
                                 if isinstance(item, dict):
                                     lines.append(f"    [#555e6e]({i})[/]")
                                     for ik, iv in item.items():
-                                        lines.append(f"      [#555e6e]{ik}:[/] {iv}")
+                                        lines.append(f"      [#555e6e]{self._esc(ik)}:[/] {self._esc(iv)}")
                                 else:
-                                    lines.append(f"    {item}")
+                                    lines.append(f"    {self._esc(item)}")
                         else:
-                            lines.append(f"  [#8892a4]{k}:[/] {v}")
+                            lines.append(f"  [#8892a4]{self._esc(k)}:[/] {self._esc(v)}")
                 lines.append("")
             self._show_result("\n".join(lines) if lines else "Empty manifest")
             self._log_success("Manifest displayed")
         else:
-            self._show_result(f"[#ff3366]{result.message}[/]")
+            self._show_result(f"[#ff3366]{self._esc(result.message)}[/]")
             self._log_error(result.message)
 
     def _run_build_guest(self, manifest) -> None:
@@ -264,14 +341,14 @@ class ModelsPanel(Widget):
             guest_dir = result.data.get("guest_dir", "?")
             target = result.data.get("target", "?")
             lines = [
-                f"[#39ff14]{result.message}[/]",
-                f"  [#8892a4]guest_dir:[/] {guest_dir}",
-                f"  [#8892a4]target:[/] {target}",
+                f"[#39ff14]{self._esc(result.message)}[/]",
+                f"  [#8892a4]guest_dir:[/] {self._esc(guest_dir)}",
+                f"  [#8892a4]target:[/] {self._esc(target)}",
             ]
             self._show_result("\n".join(lines))
             self._log_success(result.message)
         else:
-            self._show_result(f"[#ff3366]{result.message}[/]")
+            self._show_result(f"[#ff3366]{self._esc(result.message)}[/]")
             self._log_error(result.message)
 
     def _run_schema_hash(self, manifest) -> None:
@@ -279,20 +356,26 @@ class ModelsPanel(Widget):
         if result.success:
             h = result.data.get("hash", "?")
             lines = [
-                f"[#39ff14]{result.message}[/]",
-                f"  [#8892a4]hash:[/] [#00ffcc]{h}[/]",
+                f"[#39ff14]{self._esc(result.message)}[/]",
+                f"  [#8892a4]hash:[/] [#00ffcc]{self._esc(h)}[/]",
             ]
             self._show_result("\n".join(lines))
             self._log_success(result.message)
         else:
-            self._show_result(f"[#ff3366]{result.message}[/]")
+            self._show_result(f"[#ff3366]{self._esc(result.message)}[/]")
             self._log_error(result.message)
 
     def _show_result(self, text: str) -> None:
         try:
-            self.query_one("#models-result", Static).update(text)
+            self.query_one("#models-result", Static).update(Text.from_markup(text))
         except Exception:
-            pass
+            try:
+                self.query_one("#models-result", Static).update(Text(text))
+            except Exception:
+                pass
+
+    def _esc(self, value: object) -> str:
+        return escape(str(value))
 
     def _get_log(self):
         try:

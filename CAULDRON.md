@@ -12,6 +12,23 @@ Core capabilities:
 - deterministic seeded account lifecycle
 - on-chain inference on Solana
 
+## TUI Upgrade (Current)
+
+Cauldron includes a first-class TUI:
+
+```bash
+cauldron tui
+```
+
+Key points:
+
+- Two execution styles: `Wizard` (guided pipeline) and `Manual` (panel-driven).
+- Manual panel order: `Models`, `Train`, `Weights`, `Accounts`, `Invoke`.
+- Manual mode now supports bootstrap setup for brand-new projects via:
+  - `Models -> Initialize Project`, or
+  - command palette (`Ctrl+P`) -> `Initialize Project`.
+- This initializer validates the manifest and writes `frostbite-accounts.toml` so users can continue in Manual without switching modes.
+
 ## Recommended Default: Seeded Deterministic Accounts
 
 For multi-user and production-style flows, use the seeded deterministic account

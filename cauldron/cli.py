@@ -2531,6 +2531,203 @@ def _cmd_train(args: argparse.Namespace) -> int:
     return run_train_from_args(args)
 
 
+def _solana_config_path() -> Path:
+    path = os.environ.get("SOLANA_CONFIG") or os.environ.get("SOLANA_CONFIG_FILE")
+    if path:
+        return Path(path).expanduser()
+    return Path.home() / ".config" / "solana" / "cli" / "config.yml"
+
+
+def _doctor_rpc_get_version(rpc_url: str, timeout_seconds: float) -> tuple[str | None, str]:
+    if timeout_seconds <= 0:
+        raise ValueError("--rpc-timeout must be > 0")
+    payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "getVersion", "params": []}).encode()
+    req = urllib.request.Request(rpc_url, data=payload, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            body = json.loads(resp.read().decode())
+    except Exception as exc:
+        return None, f"{rpc_url} ({exc})"
+    err = body.get("error")
+    if err is not None:
+        return None, f"{rpc_url} (RPC error: {err})"
+    result = body.get("result")
+    if not isinstance(result, dict):
+        return None, f"{rpc_url} (missing result payload)"
+    version = result.get("solana-core")
+    if isinstance(version, str) and version:
+        return version, f"{rpc_url} (solana-core {version})"
+    return None, f"{rpc_url} (missing solana-core version)"
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    failures = 0
+    warnings = 0
+
+    def ok(label: str, detail: str) -> None:
+        print(f"[OK]   {label}: {detail}")
+
+    def warn(label: str, detail: str) -> None:
+        nonlocal warnings
+        warnings += 1
+        print(f"[WARN] {label}: {detail}")
+
+    def fail(label: str, detail: str) -> None:
+        nonlocal failures
+        failures += 1
+        print(f"[FAIL] {label}: {detail}")
+
+    print("Cauldron Doctor")
+    print(f"Package: {Path(__file__).resolve().parent}")
+
+    cauldron_cli = shutil.which("cauldron")
+    if cauldron_cli:
+        ok("cauldron on PATH", cauldron_cli)
+    else:
+        warn("cauldron on PATH", "not found (you can still run via `python -m cauldron.cli`)")
+
+    platform_tag = _platform_tag()
+    if platform_tag:
+        ok("platform tag", platform_tag)
+    else:
+        warn("platform tag", f"unsupported platform {platform.system().lower()} / {platform.machine().lower()}")
+    ok("runner filename", _runner_filename())
+
+    runner_override = os.environ.get("FROSTBITE_RUN_ONCHAIN")
+    if runner_override:
+        override_path = Path(runner_override).expanduser()
+        if not override_path.exists():
+            fail("FROSTBITE_RUN_ONCHAIN", f"{override_path} does not exist")
+        elif not override_path.is_file():
+            fail("FROSTBITE_RUN_ONCHAIN", f"{override_path} is not a file")
+        elif platform.system().lower() != "windows" and not os.access(override_path, os.X_OK):
+            fail("FROSTBITE_RUN_ONCHAIN", f"{override_path} is not executable")
+        else:
+            ok("FROSTBITE_RUN_ONCHAIN", str(override_path))
+
+    runner = _resolve_run_onchain()
+    runner_path = Path(runner).expanduser()
+    if runner_path.exists():
+        if not runner_path.is_file():
+            fail("runner resolution", f"{runner_path} is not a file")
+        elif platform.system().lower() != "windows" and not os.access(runner_path, os.X_OK):
+            fail("runner resolution", f"{runner_path} is not executable")
+        else:
+            ok("runner resolution", str(runner_path))
+    else:
+        runner_on_path = shutil.which(runner)
+        if runner_on_path:
+            ok("runner resolution", f"{runner} -> {runner_on_path}")
+        else:
+            fail(
+                "runner resolution",
+                "unable to find frostbite-run-onchain (set FROSTBITE_RUN_ONCHAIN or install bundled runner)",
+            )
+
+    solana_bin = shutil.which("solana")
+    if not solana_bin:
+        fail("solana CLI", "not found on PATH")
+    else:
+        try:
+            proc = subprocess.run([solana_bin, "--version"], text=True, capture_output=True)
+        except OSError as exc:
+            fail("solana CLI", f"failed to execute {solana_bin}: {exc}")
+        else:
+            if proc.returncode != 0:
+                detail = (proc.stderr or proc.stdout or "").strip() or f"exit code {proc.returncode}"
+                fail("solana CLI", detail)
+            else:
+                detail = (proc.stdout or proc.stderr or "").strip() or solana_bin
+                ok("solana CLI", detail)
+
+    cfg_path = _solana_config_path()
+    cfg = _load_solana_cli_config()
+    if cfg:
+        ok("solana config", str(cfg_path))
+    elif cfg_path.exists():
+        warn("solana config", f"{cfg_path} exists but no expected keys were parsed")
+    else:
+        warn("solana config", f"{cfg_path} not found")
+
+    env = os.environ
+
+    rpc_source = "<unset>"
+    rpc_url = args.rpc_url
+    if rpc_url:
+        rpc_source = "--rpc-url"
+    else:
+        env_rpc = env.get("FROSTBITE_RPC_URL")
+        if env_rpc:
+            rpc_url = env_rpc
+            rpc_source = "FROSTBITE_RPC_URL"
+        else:
+            cfg_rpc = cfg.get("json_rpc_url")
+            if isinstance(cfg_rpc, str) and cfg_rpc:
+                rpc_url = cfg_rpc
+                rpc_source = "solana config (json_rpc_url)"
+    if rpc_url:
+        ok("rpc url", f"{rpc_url} ({rpc_source})")
+    else:
+        fail("rpc url", "not configured (use --rpc-url, FROSTBITE_RPC_URL, or solana config)")
+
+    payer_source = "<unset>"
+    payer = args.payer
+    if payer:
+        payer_source = "--payer"
+    else:
+        env_payer = env.get("FROSTBITE_PAYER_KEYPAIR")
+        if env_payer:
+            payer = env_payer
+            payer_source = "FROSTBITE_PAYER_KEYPAIR"
+        else:
+            cfg_payer = cfg.get("keypair_path")
+            if isinstance(cfg_payer, str) and cfg_payer:
+                payer = cfg_payer
+                payer_source = "solana config (keypair_path)"
+    if payer:
+        payer_path = Path(payer).expanduser()
+        if payer_path.exists():
+            ok("payer keypair", f"{payer_path} ({payer_source})")
+        else:
+            fail("payer keypair", f"{payer_path} not found ({payer_source})")
+    else:
+        fail("payer keypair", "not configured (use --payer, FROSTBITE_PAYER_KEYPAIR, or solana config)")
+
+    program_source = "default"
+    program_id = args.program_id
+    if program_id:
+        program_source = "--program-id"
+    else:
+        env_program_id = env.get("FROSTBITE_PROGRAM_ID")
+        if env_program_id:
+            program_id = env_program_id
+            program_source = "FROSTBITE_PROGRAM_ID"
+        else:
+            cfg_program_id = cfg.get("program_id")
+            if isinstance(cfg_program_id, str) and cfg_program_id:
+                program_id = cfg_program_id
+                program_source = "solana config (program_id)"
+            else:
+                program_id = DEFAULT_PROGRAM_ID
+    ok("program id", f"{program_id} ({program_source})")
+
+    if args.skip_rpc:
+        warn("rpc connectivity", "skipped (--skip-rpc)")
+    elif rpc_url:
+        version, detail = _doctor_rpc_get_version(rpc_url, args.rpc_timeout)
+        if version:
+            ok("rpc connectivity", detail)
+        else:
+            fail("rpc connectivity", detail)
+
+    print(f"Summary: {failures} failure(s), {warnings} warning(s)")
+    if failures:
+        print("Doctor result: FAIL")
+        return 1
+    print("Doctor result: OK")
+    return 0
+
+
 def _cmd_tui(args: argparse.Namespace) -> int:
     try:
         from .tui import launch_tui
@@ -3081,6 +3278,19 @@ def main(argv: list[str] | None = None) -> int:
         help="Percentile for input calibration (writes input_calibration.json)",
     )
     p_train.set_defaults(func=_cmd_train)
+
+    p_doctor = sub.add_parser("doctor", help="Check local Cauldron and Solana environment health")
+    p_doctor.add_argument("--rpc-url", help="RPC URL override for connectivity checks")
+    p_doctor.add_argument("--payer", help="Payer keypair path override")
+    p_doctor.add_argument("--program-id", help="Program ID override")
+    p_doctor.add_argument("--skip-rpc", action="store_true", help="Skip live RPC connectivity probe")
+    p_doctor.add_argument(
+        "--rpc-timeout",
+        type=float,
+        default=5.0,
+        help="RPC connectivity timeout in seconds (default: 5.0)",
+    )
+    p_doctor.set_defaults(func=_cmd_doctor)
 
     # ── TUI ───────────────────────────────────────────────────────
     p_tui = sub.add_parser("tui", help="Launch the interactive TUI")

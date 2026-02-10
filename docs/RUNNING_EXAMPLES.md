@@ -11,6 +11,22 @@ current seeded deterministic account model.
 Note: keep `abi.entry >= 0x4000` so guest code does not overwrite VM
 header/control block. Templates already default to `0x4000`.
 
+## Optional: Run the same flow in TUI
+
+```bash
+cauldron tui
+```
+
+From the mode picker:
+- `Wizard` for guided setup end-to-end.
+- `Manual` for panel-driven flow.
+
+If you choose `Manual` on a fresh project, start with:
+- `Models -> Initialize Project`
+- `Accounts -> Create Accounts`
+
+Then continue with `Weights` and `Invoke` panels.
+
 ## 1) Create a project
 
 ```bash

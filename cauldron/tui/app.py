@@ -17,6 +17,7 @@ class CauldronCommandProvider(Provider):
 
     async def search(self, query: str) -> Hits:
         commands = [
+            ("Initialize Project", "cmd_initialize_project"),
             ("Validate Manifest", "cmd_validate"),
             ("Show Manifest", "cmd_show"),
             ("Pack Manifest", "cmd_pack"),
@@ -274,6 +275,58 @@ class CauldronApp(App):
             project_path=proj.path,
         )
         self.notify(result.message, severity="information" if result.success else "error")
+
+    def cmd_initialize_project(self) -> None:
+        proj = self.app_state.active_project
+        if not proj:
+            self.notify("No active project", severity="warning")
+            return
+
+        # Preferred UX: run initialization inside Manual -> Models so output is visible.
+        try:
+            from .screens.manual import ManualScreen
+            from .panels.models import ModelsPanel
+
+            screen = self.screen
+            if isinstance(screen, ManualScreen):
+                screen.action_switch_panel("models")
+                panel = screen.query_one("#models", ModelsPanel)
+                panel.run_initialize_action()
+                return
+        except Exception:
+            pass
+
+        # Fallback for non-manual screens: perform minimal bootstrap and notify.
+        from .commands import cmd_validate, cmd_accounts_init
+        from .registry import register_project
+
+        validate_result = cmd_validate(proj.manifest_path)
+        if not validate_result.success:
+            msg = validate_result.message
+            if validate_result.errors:
+                msg = f"{msg}: {validate_result.errors[0]}"
+            self.notify(msg, severity="error")
+            return
+
+        runtime = resolve_runtime_context(proj)
+        init_result = cmd_accounts_init(
+            manifest_path=proj.manifest_path,
+            rpc_url=runtime.rpc_url,
+            program_id=runtime.program_id,
+            payer=runtime.payer,
+            project_path=proj.path,
+        )
+        if init_result.success:
+            path_str = init_result.data.get("path")
+            if isinstance(path_str, str) and path_str:
+                proj.accounts_path = Path(path_str)
+            proj.cluster = runtime.cluster
+            proj.rpc_url = runtime.rpc_url
+            proj.program_id = runtime.program_id
+            proj.payer = runtime.payer
+            proj.deployment_state = "accounts_init"
+            register_project(proj)
+        self.notify(init_result.message, severity="information" if init_result.success else "error")
 
     def action_wizard(self) -> None:
         proj = self.app_state.active_project

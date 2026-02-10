@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from rich.markup import escape
 from textual.widgets import RichLog
 
 
@@ -25,16 +26,16 @@ class LogPanel(RichLog):
         super().__init__(highlight=True, markup=True, wrap=True, **kwargs)
 
     def log_info(self, message: str) -> None:
-        self.write(f"[#8892a4]{message}[/]")
+        self.write(f"[#8892a4]{escape(message)}[/]")
 
     def log_success(self, message: str) -> None:
-        self.write(f"[#39ff14]{message}[/]")
+        self.write(f"[#39ff14]{escape(message)}[/]")
 
     def log_error(self, message: str) -> None:
-        self.write(f"[#ff3366]{message}[/]")
+        self.write(f"[#ff3366]{escape(message)}[/]")
 
     def log_warning(self, message: str) -> None:
-        self.write(f"[#ffaa00]{message}[/]")
+        self.write(f"[#ffaa00]{escape(message)}[/]")
 
     def log_tx(self, message: str) -> None:
-        self.write(f"[#00ffcc]{message}[/]")
+        self.write(f"[#00ffcc]{escape(message)}[/]")
