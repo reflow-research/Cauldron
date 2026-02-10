@@ -16,6 +16,10 @@ train = [
   "pandas>=2.0",
   "scikit-learn>=1.3",
 ]
+tui = [
+  "textual>=0.86",
+  "tomli_w>=1.0",
+]
 
 [project.scripts]
 frostbite-modelkit = "cauldron.cli:main"
@@ -23,7 +27,7 @@ cauldron = "cauldron.cli:main"
 cauldron-postinstall = "cauldron.postinstall:main"
 
 [tool.setuptools]
-packages = ["cauldron", "cauldron.training"]
+packages = ["cauldron", "cauldron.training", "cauldron.tui", "cauldron.tui.screens", "cauldron.tui.widgets", "cauldron.tui.panels"]
 package-dir = {"" = "."}
 include-package-data = true
 
@@ -36,4 +40,5 @@ cauldron = [
   "templates/**/.cargo/**",
   "toolchain/**",
   "rust_tools/**",
+  "tui/*.tcss",
 ]

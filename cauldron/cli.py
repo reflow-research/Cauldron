@@ -41,9 +41,10 @@ from .accounts import (
     derive_segment_pda,
 )
 from .constants import MMU_VM_HEADER_SIZE, FBM1_MAGIC, ABI_VERSION, DTYPE_SIZES, DEFAULT_PROGRAM_ID
+from . import helpers as _h
 
 
-_EXEC_SIG_RE = re.compile(r"TX exec-\d+ sig:\s*([1-9A-HJ-NP-Za-km-z]+)")
+_EXEC_SIG_RE = _h.EXEC_SIG_RE
 
 _TEMPLATE_LINEAR = """
 [model]
@@ -1095,7 +1096,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
     template = args.template
     dest = Path(args.path).resolve()
-    if dest.exists() and any(dest.iterdir()):
+    allow_non_empty = bool(getattr(args, "allow_non_empty", False))
+    if dest.exists() and any(dest.iterdir()) and not allow_non_empty:
         print(f"Destination not empty: {dest}")
         return 1
 
@@ -1109,6 +1111,20 @@ def _cmd_init(args: argparse.Namespace) -> int:
         copy_guest = False
     elif args.copy_guest:
         copy_guest = True
+
+    if allow_non_empty:
+        conflicts: list[str] = []
+        if manifest_path.exists():
+            conflicts.append(manifest_name)
+        if (dest / "guest").exists():
+            conflicts.append("guest/")
+        if conflicts:
+            print(
+                "Destination contains conflicting Cauldron files: "
+                + ", ".join(conflicts)
+                + ". Choose a different path, remove conflicts, or disable allow-non-empty."
+            )
+            return 1
 
     if template == "linear":
         manifest_path.write_text(_TEMPLATE_LINEAR)
@@ -1270,135 +1286,34 @@ def _load_mapped_file(path: str, default_writable: bool) -> list[dict[str, str |
 
 
 def _resolve_accounts_path(accounts_path: str, raw_path: str) -> str:
-    candidate = Path(raw_path).expanduser()
-    if candidate.is_absolute():
-        return str(candidate)
-    return str((Path(accounts_path).resolve().parent / candidate).resolve())
+    return _h.resolve_accounts_path(accounts_path, raw_path)
 
 
 def _validate_vm_authority_binding(accounts_path: str, vm: dict[str, object]) -> None:
-    authority_raw = vm.get("authority")
-    authority_keypair_raw = vm.get("authority_keypair")
-    if not isinstance(authority_raw, str) or not authority_raw:
-        return
-    if not isinstance(authority_keypair_raw, str) or not authority_keypair_raw:
-        return
-
-    authority_keypair_pubkey = resolve_pubkey(
-        {"keypair": _resolve_accounts_path(accounts_path, authority_keypair_raw)}
+    _h.validate_vm_authority_binding(
+        accounts_path,
+        vm,
+        resolve_pubkey_fn=resolve_pubkey,
+        resolve_accounts_path_fn=_resolve_accounts_path,
     )
-    if authority_keypair_pubkey and authority_keypair_pubkey != authority_raw:
-        raise ValueError(
-            "vm.authority does not match vm.authority_keypair pubkey; "
-            "update accounts file or signer path"
-        )
 
 
 def _apply_accounts_env(env: dict[str, str], accounts_path: str, require_weights_keypair: bool) -> dict[str, str]:
-    accounts = load_accounts(accounts_path)
-    cluster = accounts.get("cluster") if isinstance(accounts.get("cluster"), dict) else {}
-    if isinstance(cluster.get("rpc_url"), str) and "FROSTBITE_RPC_URL" not in env:
-        env["FROSTBITE_RPC_URL"] = cluster["rpc_url"]
-    if isinstance(cluster.get("payer"), str) and "FROSTBITE_PAYER_KEYPAIR" not in env:
-        env["FROSTBITE_PAYER_KEYPAIR"] = _resolve_accounts_path(accounts_path, cluster["payer"])
-    if "FROSTBITE_PROGRAM_ID" not in env:
-        if isinstance(cluster.get("program_id"), str):
-            env["FROSTBITE_PROGRAM_ID"] = cluster["program_id"]
-        else:
-            env["FROSTBITE_PROGRAM_ID"] = DEFAULT_PROGRAM_ID
-
-    vm = accounts.get("vm") if isinstance(accounts.get("vm"), dict) else {}
-    _validate_vm_authority_binding(accounts_path, vm)
-    authority_keypair_path: str | None = None
-    if isinstance(vm.get("authority_keypair"), str) and vm.get("authority_keypair"):
-        authority_keypair_path = _resolve_accounts_path(accounts_path, vm["authority_keypair"])
-        env["FROSTBITE_AUTHORITY_KEYPAIR"] = authority_keypair_path
-    if "FROSTBITE_PAYER_KEYPAIR" not in env:
-        if authority_keypair_path:
-            env["FROSTBITE_PAYER_KEYPAIR"] = authority_keypair_path
-
-    segments = parse_segments(accounts)
-    weights = [seg for seg in segments if seg.kind.strip().lower() == "weights"]
-    if weights:
-        if len(weights) > 1:
-            raise ValueError("accounts file has multiple weights segments; single-account mode only")
-        seg = weights[0]
-        legacy_env_override = env.get("FROSTBITE_CHUNK_KEYPAIR") or env.get("FROSTBITE_WEIGHTS_KEYPAIR")
-        vm_seed = parse_vm_seed(vm)
-        if vm_seed is not None:
-            if legacy_env_override:
-                raise ValueError(
-                    "vm.seed enables PDA mode; remove FROSTBITE_CHUNK_KEYPAIR/FROSTBITE_WEIGHTS_KEYPAIR override"
-                )
-            if seg.keypair:
-                raise ValueError(
-                    "vm.seed enables PDA mode; remove weights segment keypair and use derived PDA metadata"
-                )
-            program_id = env.get("FROSTBITE_PROGRAM_ID", DEFAULT_PROGRAM_ID)
-            authority_pubkey = resolve_authority_pubkey(
-                accounts,
-                authority_keypair_override=authority_keypair_path or env.get("FROSTBITE_PAYER_KEYPAIR"),
-            )
-            if not authority_pubkey:
-                raise ValueError(
-                    "PDA upload requires authority pubkey; set vm.authority, vm.authority_keypair, "
-                    "cluster.payer, or --payer"
-                )
-            payer_pubkey = None
-            if authority_keypair_path is None and "FROSTBITE_PAYER_KEYPAIR" in env:
-                payer_pubkey = resolve_pubkey({"keypair": env["FROSTBITE_PAYER_KEYPAIR"]})
-            if authority_keypair_path is None and payer_pubkey and authority_pubkey != payer_pubkey:
-                raise ValueError(
-                    "PDA upload authority differs from payer signer; set vm.authority_keypair "
-                    "or use --payer that matches vm.authority"
-                )
-            env["FROSTBITE_AUTHORITY_PUBKEY"] = authority_pubkey
-            env["FROSTBITE_UPLOAD_MODE"] = "pda"
-            env["FROSTBITE_VM_SEED"] = str(vm_seed)
-            env["FROSTBITE_SEGMENT_KIND"] = "weights"
-            if seg.slot != 1:
-                raise ValueError("PDA mode requires weights segment at slot 1")
-            env["FROSTBITE_SEGMENT_SLOT"] = str(seg.slot)
-            derived_vm_pubkey = derive_vm_pda(program_id, authority_pubkey, vm_seed)
-            configured_vm_pubkey = resolve_pubkey(vm)
-            if configured_vm_pubkey and configured_vm_pubkey != derived_vm_pubkey:
-                raise ValueError(
-                    "vm.pubkey does not match derived VM PDA for vm.seed/authority; "
-                    "remove vm.pubkey or fix vm.seed/authority"
-                )
-            env["FROSTBITE_VM_PUBKEY"] = derived_vm_pubkey
-
-            seg_pubkey = seg.pubkey or (
-                resolve_pubkey({"keypair": _resolve_accounts_path(accounts_path, seg.keypair)}) if seg.keypair else None
-            )
-            kind_code = segment_kind_code(seg.kind)
-            if kind_code is None:
-                raise ValueError("weights segment has unsupported kind metadata")
-            derived_segment_pubkey = derive_segment_pda(
-                program_id,
-                authority_pubkey,
-                vm_seed,
-                kind_code,
-                seg.slot,
-            )
-            if seg_pubkey and seg_pubkey != derived_segment_pubkey:
-                raise ValueError(
-                    "weights segment pubkey does not match derived PDA for vm.seed/authority/slot; "
-                    "remove segment pubkey/keypair or fix metadata"
-                )
-            env["FROSTBITE_SEGMENT_PUBKEY"] = derived_segment_pubkey
-            return env
-
-        if legacy_env_override:
-            return env
-        if seg.keypair:
-            env["FROSTBITE_CHUNK_KEYPAIR"] = _resolve_accounts_path(accounts_path, seg.keypair)
-            return env
-        if require_weights_keypair:
-            raise ValueError("weights segment requires keypair for legacy upload or vm.seed for PDA upload")
-    elif require_weights_keypair:
-        raise ValueError("accounts file missing weights segment")
-    return env
+    return _h.apply_accounts_env(
+        env,
+        accounts_path,
+        require_weights_keypair,
+        load_accounts_fn=load_accounts,
+        parse_segments_fn=parse_segments,
+        resolve_accounts_path_fn=_resolve_accounts_path,
+        validate_vm_authority_binding_fn=_validate_vm_authority_binding,
+        resolve_authority_pubkey_fn=resolve_authority_pubkey,
+        resolve_pubkey_fn=resolve_pubkey,
+        parse_vm_seed_fn=parse_vm_seed,
+        segment_kind_code_fn=segment_kind_code,
+        derive_vm_pda_fn=derive_vm_pda,
+        derive_segment_pda_fn=derive_segment_pda,
+    )
 
 
 def _accounts_segment_metas(
@@ -1407,104 +1322,22 @@ def _accounts_segment_metas(
     program_id_override: str | None = None,
     payer_override: str | None = None,
 ) -> tuple[dict[str, str | None], list[str]]:
-    accounts = load_accounts(accounts_path)
-    cluster = accounts.get("cluster") if isinstance(accounts.get("cluster"), dict) else {}
-    vm = accounts.get("vm") if isinstance(accounts.get("vm"), dict) else {}
-    _validate_vm_authority_binding(accounts_path, vm)
-    program_id = program_id_override or (
-        cluster.get("program_id") if isinstance(cluster.get("program_id"), str) else DEFAULT_PROGRAM_ID
+    return _h.accounts_segment_metas(
+        accounts_path,
+        program_id_override=program_id_override,
+        payer_override=payer_override,
+        load_accounts_fn=load_accounts,
+        parse_segments_fn=parse_segments,
+        resolve_accounts_path_fn=_resolve_accounts_path,
+        validate_vm_authority_binding_fn=_validate_vm_authority_binding,
+        resolve_authority_pubkey_fn=resolve_authority_pubkey,
+        resolve_pubkey_fn=resolve_pubkey,
+        parse_vm_seed_fn=parse_vm_seed,
+        parse_vm_entry_fn=parse_vm_entry,
+        segment_kind_code_fn=segment_kind_code,
+        derive_vm_pda_fn=derive_vm_pda,
+        derive_segment_pda_fn=derive_segment_pda,
     )
-    payer_keypair = payer_override
-    if not payer_keypair and isinstance(cluster.get("payer"), str):
-        payer_keypair = _resolve_accounts_path(accounts_path, cluster["payer"])
-    authority_override = payer_keypair
-    if isinstance(vm.get("authority_keypair"), str) and vm.get("authority_keypair"):
-        authority_override = _resolve_accounts_path(accounts_path, vm["authority_keypair"])
-
-    vm_seed = parse_vm_seed(vm)
-    vm_entry_pc = parse_vm_entry(vm)
-    authority_pubkey = resolve_authority_pubkey(accounts, authority_keypair_override=authority_override)
-    vm_pubkey = resolve_pubkey(vm)
-    if vm_seed is not None:
-        if not authority_pubkey:
-            raise ValueError("Unable to derive VM PDA: missing authority pubkey")
-        expected_vm_pda = derive_vm_pda(program_id, authority_pubkey, vm_seed)
-        if vm_pubkey and vm_pubkey != expected_vm_pda:
-            raise ValueError(
-                "vm.pubkey does not match derived VM PDA for vm.seed/authority; "
-                "remove vm.pubkey or fix vm.seed/authority"
-            )
-        vm_pubkey = expected_vm_pda
-    if not vm_pubkey:
-        raise ValueError("accounts file missing vm pubkey/keypair (or vm.seed + authority)")
-
-    segments = parse_segments(accounts)
-    if not segments:
-        raise ValueError("accounts file has no segments")
-
-    # Return cluster info + ordered mapped account list (segment order)
-    mapped: list[tuple[int, bool, str]] = []
-    for seg in segments:
-        pubkey = seg.pubkey or (
-            resolve_pubkey({"keypair": _resolve_accounts_path(accounts_path, seg.keypair)}) if seg.keypair else None
-        )
-        if vm_seed is not None:
-            kind_code = segment_kind_code(seg.kind)
-            if kind_code is None:
-                raise ValueError(
-                    f"Unable to derive segment {seg.index}: unsupported kind '{seg.kind}' (expected weights|ram)"
-                )
-            if seg.slot == 1 and kind_code != 1:
-                raise ValueError("PDA mode requires a weights segment at slot 1")
-            if kind_code == 1 and seg.slot != 1:
-                raise ValueError("PDA mode supports weights only at slot 1")
-            if not (1 <= seg.slot <= 15):
-                raise ValueError(
-                    f"Unable to derive segment {seg.index}: slot {seg.slot} is out of range (1..15)"
-                )
-            expected_segment_pda = derive_segment_pda(program_id, authority_pubkey, vm_seed, kind_code, seg.slot)
-            if pubkey and pubkey != expected_segment_pda:
-                raise ValueError(
-                    f"segment {seg.index} pubkey does not match derived PDA for vm.seed/authority/slot; "
-                    "remove segment pubkey/keypair or fix metadata"
-                )
-            pubkey = expected_segment_pda
-            expected_writable = kind_code == 2  # weights=1 readonly, ram=2 writable
-            if seg.writable != expected_writable:
-                access_mode = "writable" if expected_writable else "readonly"
-                raise ValueError(
-                    f"segment {seg.index} ({seg.kind}) must be {access_mode} in PDA mode; "
-                    "fix segment writable metadata"
-                )
-        if not pubkey:
-            raise ValueError(f"segment {seg.index} missing pubkey/keypair (or derivation metadata)")
-        sort_key = seg.slot if vm_seed is not None else seg.index
-        mapped.append((sort_key, seg.writable, pubkey))
-    mapped.sort(key=lambda item: item[0])
-    if vm_seed is not None:
-        seen_slots: set[int] = set()
-        for slot, _, _ in mapped:
-            if slot in seen_slots:
-                raise ValueError(
-                    f"duplicate segment slot {slot} in PDA mode; each mapped account must use a unique slot"
-                )
-            seen_slots.add(slot)
-        for expected_slot, (actual_slot, _, _) in enumerate(mapped, start=1):
-            if actual_slot != expected_slot:
-                raise ValueError(
-                    "PDA execute requires contiguous segment slots starting at 1; "
-                    f"missing slot {expected_slot} before configured slot {actual_slot}"
-                )
-
-    return {
-        "rpc_url": cluster.get("rpc_url"),
-        "program_id": program_id,
-        "payer": payer_keypair or cluster.get("payer"),
-        "vm_pubkey": vm_pubkey,
-        "authority_pubkey": authority_pubkey,
-        "vm_seed": str(vm_seed) if vm_seed is not None else None,
-        "vm_entry": str(vm_entry_pc) if vm_entry_pc is not None else None,
-    }, [f"{'rw' if writable else 'ro'}:{pubkey}" for _, writable, pubkey in mapped]
 
 
 def _cmd_convert(args: argparse.Namespace) -> int:
@@ -1656,37 +1489,7 @@ def _build_control_block(
     output_ptr: int,
     output_len: int,
 ) -> bytes:
-    if control_size < 64:
-        raise ValueError("abi.control_size must be >= 64")
-    for name, value in (
-        ("input_ptr", input_ptr),
-        ("input_len", input_len),
-        ("output_ptr", output_ptr),
-        ("output_len", output_len),
-    ):
-        if value < 0 or value > 0xFFFF_FFFF:
-            raise ValueError(f"{name} must fit in u32")
-
-    buf = bytearray(control_size)
-    struct.pack_into(
-        "<IIIIIIIIIIIIQ",
-        buf,
-        0,
-        FBM1_MAGIC,
-        ABI_VERSION,
-        0,
-        0,
-        input_ptr,
-        input_len,
-        output_ptr,
-        output_len,
-        0,
-        0,
-        0,
-        0,
-        0,
-    )
-    return bytes(buf)
+    return _h.build_control_block(control_size, input_ptr, input_len, output_ptr, output_len)
 
 
 def _write_account(
@@ -1696,25 +1499,7 @@ def _write_account(
     payload_path: Path,
     chunk_size: int | None,
 ) -> int:
-    if offset < 0 or offset > 0xFFFF_FFFF:
-        raise ValueError("offset must fit in u32")
-    rust_tools = Path(__file__).resolve().parent / "rust_tools"
-    payload_path = payload_path.resolve()
-    cmd = [
-        "cargo",
-        "run",
-        "--bin",
-        "write_account",
-        "--",
-        account_pubkey,
-        str(offset),
-        str(payload_path),
-    ]
-    if chunk_size:
-        cmd.extend(["--chunk-size", str(chunk_size)])
-    print("Running:", " ".join(cmd))
-    proc = subprocess.run(cmd, env=env, cwd=str(rust_tools))
-    return proc.returncode
+    return _h.write_account(env, account_pubkey, offset, payload_path, chunk_size)
 
 
 def _cmd_input_write(args: argparse.Namespace) -> int:
@@ -1827,39 +1612,15 @@ def _cmd_input_write(args: argparse.Namespace) -> int:
 
 
 def _rpc_request_raw(url: str, method: str, params: list) -> dict:
-    payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    retries = 6
-    for attempt in range(retries + 1):
-        try:
-            with urllib.request.urlopen(req) as resp:
-                return json.loads(resp.read().decode())
-        except urllib.error.HTTPError as exc:
-            if exc.code in {429, 500, 502, 503, 504} and attempt < retries:
-                time.sleep(0.25 * (2**attempt))
-                continue
-            raise ValueError(f"RPC HTTP error {exc.code}: {exc.reason}") from exc
-        except urllib.error.URLError as exc:
-            if attempt < retries:
-                time.sleep(0.25 * (2**attempt))
-                continue
-            raise ValueError(f"RPC transport error: {exc}") from exc
-    raise ValueError("RPC request failed after retries")
+    return _h.rpc_request_raw(url, method, params)
 
 
 def _rpc_request(url: str, method: str, params: list) -> dict:
-    data = _rpc_request_raw(url, method, params)
-    if "error" in data:
-        raise ValueError(f"RPC error: {data['error']}")
-    return data.get("result", {})
+    return _h.rpc_request(url, method, params)
 
 
 def _commitment_satisfied(status: str | None, commitment: str) -> bool:
-    if commitment == "processed":
-        return status in {"processed", "confirmed", "finalized"}
-    if commitment == "confirmed":
-        return status in {"confirmed", "finalized"}
-    return status == "finalized"
+    return _h.commitment_satisfied(status, commitment)
 
 
 def _wait_for_signature_slot(
@@ -1869,35 +1630,7 @@ def _wait_for_signature_slot(
     wait_seconds: float,
     poll_interval: float,
 ) -> int:
-    if wait_seconds < 0:
-        raise ValueError("--wait-seconds must be >= 0")
-    if poll_interval <= 0:
-        raise ValueError("--poll-interval must be > 0")
-    deadline = time.monotonic() + wait_seconds
-    while True:
-        result = _rpc_request(
-            rpc_url,
-            "getSignatureStatuses",
-            [[signature], {"searchTransactionHistory": True}],
-        )
-        entries = result.get("value") if isinstance(result, dict) else None
-        entry = entries[0] if isinstance(entries, list) and entries else None
-        if isinstance(entry, dict):
-            err = entry.get("err")
-            if err is not None:
-                raise ValueError(f"Signature {signature} failed: {err}")
-            slot = entry.get("slot")
-            status = entry.get("confirmationStatus")
-            if isinstance(slot, int):
-                if commitment == "processed":
-                    return slot
-                if _commitment_satisfied(status, commitment):
-                    return slot
-        if time.monotonic() >= deadline:
-            raise ValueError(
-                f"Timed out waiting for signature {signature} to reach {commitment} commitment"
-            )
-        time.sleep(poll_interval)
+    return _h.wait_for_signature_slot(rpc_url, signature, commitment, wait_seconds, poll_interval)
 
 
 def _fetch_account_data(
@@ -1909,123 +1642,19 @@ def _fetch_account_data(
     wait_seconds: float = 30.0,
     poll_interval: float = 0.5,
 ) -> bytes:
-    if wait_seconds < 0:
-        raise ValueError("--wait-seconds must be >= 0")
-    if poll_interval <= 0:
-        raise ValueError("--poll-interval must be > 0")
-    opts: dict[str, object] = {"encoding": "base64", "commitment": commitment}
-    if min_context_slot is not None:
-        if min_context_slot < 0:
-            raise ValueError("--min-context-slot must be >= 0")
-        opts["minContextSlot"] = min_context_slot
-
-    deadline = time.monotonic() + wait_seconds
-    while True:
-        payload = _rpc_request_raw(rpc_url, "getAccountInfo", [pubkey, opts])
-        err = payload.get("error")
-        if err is not None:
-            code = err.get("code") if isinstance(err, dict) else None
-            # -32016: minimum context slot not reached yet
-            if min_context_slot is not None and code == -32016 and time.monotonic() < deadline:
-                time.sleep(poll_interval)
-                continue
-            raise ValueError(f"RPC error: {err}")
-
-        result = payload.get("result", {})
-        value = result.get("value") if isinstance(result, dict) else None
-        if value is None:
-            raise ValueError("Account not found")
-        data = value.get("data") if isinstance(value, dict) else None
-        if not data:
-            raise ValueError("Account data missing")
-        if isinstance(data, list) and data:
-            b64 = data[0]
-        elif isinstance(data, str):
-            b64 = data
-        else:
-            raise ValueError("Unexpected account data format")
-        return base64.b64decode(b64)
+    return _h.fetch_account_data(rpc_url, pubkey, commitment=commitment, min_context_slot=min_context_slot, wait_seconds=wait_seconds, poll_interval=poll_interval)
 
 
 def _parse_control_block(scratch: bytes, control_offset: int) -> dict[str, int]:
-    if control_offset < 0 or control_offset + 64 > len(scratch):
-        raise ValueError("control block out of bounds")
-    fields = struct.unpack_from("<IIIIIIIIIIIIQ", scratch, control_offset)
-    keys = [
-        "magic",
-        "abi_version",
-        "flags",
-        "status",
-        "input_ptr",
-        "input_len",
-        "output_ptr",
-        "output_len",
-        "scratch_ptr",
-        "scratch_len",
-        "user_ptr",
-        "user_len",
-        "reserved0",
-    ]
-    return dict(zip(keys, fields))
+    return _h.parse_control_block(scratch, control_offset)
 
 
 def _schema_output_info(manifest: dict) -> tuple[str | None, int | None]:
-    schema = manifest.get("schema")
-    if not isinstance(schema, dict):
-        return None, None
-    stype = schema.get("type")
-    if stype == "vector" and isinstance(schema.get("vector"), dict):
-        out_dtype = schema["vector"].get("output_dtype")
-        out_shape = schema["vector"].get("output_shape")
-    elif stype == "time_series" and isinstance(schema.get("time_series"), dict):
-        out_dtype = schema["time_series"].get("output_dtype")
-        out_shape = schema["time_series"].get("output_shape")
-    elif stype == "graph" and isinstance(schema.get("graph"), dict):
-        out_dtype = schema["graph"].get("output_dtype")
-        out_shape = schema["graph"].get("output_shape")
-    elif stype == "custom" and isinstance(schema.get("custom"), dict):
-        out_dtype = "u8"
-        out_shape = [schema["custom"].get("output_blob_size")]
-    else:
-        return None, None
-
-    if not isinstance(out_dtype, str):
-        out_dtype = None
-    count = None
-    if isinstance(out_shape, list) and out_shape:
-        try:
-            count = 1
-            for dim in out_shape:
-                count *= int(dim)
-        except (TypeError, ValueError):
-            count = None
-    return out_dtype, count
+    return _h.schema_output_info(manifest)
 
 
 def _decode_output(data: bytes, fmt: str, count: int | None) -> str:
-    if fmt == "hex":
-        return data.hex()
-    if fmt == "raw":
-        return "<raw>"
-    if fmt == "u8":
-        return json.dumps(list(data))
-
-    struct_map = {"i32": "i", "u32": "I", "f32": "f", "i16": "h", "i8": "b", "u8": "B"}
-    fmt_char = struct_map.get(fmt)
-    if fmt_char is None:
-        return data.hex()
-    item_size = DTYPE_SIZES.get(fmt)
-    if not item_size:
-        return data.hex()
-
-    max_items = len(data) // item_size
-    if count is None or count > max_items:
-        count = max_items
-    if count <= 0:
-        return "[]"
-    fmt_str = "<" + fmt_char * count
-    values = struct.unpack_from(fmt_str, data, 0)
-    return json.dumps(list(values))
+    return _h.decode_output(data, fmt, count)
 
 
 def _cmd_output(args: argparse.Namespace) -> int:
@@ -2123,149 +1752,34 @@ def _cmd_output(args: argparse.Namespace) -> int:
     return 0
 
 
-_CLUSTER_URLS = {
-    "localnet": "http://127.0.0.1:8899",
-    "devnet": "https://api.devnet.solana.com",
-    "mainnet": "https://api.mainnet-beta.solana.com",
-}
+_CLUSTER_URLS = _h.CLUSTER_URLS
 
 
 def _load_solana_cli_config() -> dict[str, str]:
-    path = os.environ.get("SOLANA_CONFIG") or os.environ.get("SOLANA_CONFIG_FILE")
-    if path:
-        cfg_path = Path(path)
-    else:
-        cfg_path = Path.home() / ".config" / "solana" / "cli" / "config.yml"
-    try:
-        text = cfg_path.read_text()
-    except OSError:
-        return {}
-    cfg: dict[str, str] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        key = key.strip()
-        value = value.strip().strip("\"'")
-        if key:
-            cfg[key] = value
-    return cfg
+    return _h.load_solana_cli_config()
 
 
 def _resolve_run_onchain() -> str:
-    env_path = os.environ.get("FROSTBITE_RUN_ONCHAIN")
-    if env_path:
-        return env_path
-    package_dir = Path(__file__).resolve().parent
-    runner = _runner_filename()
-    tag = _platform_tag()
-    if tag:
-        bundled = package_dir / "bin" / tag / runner
-        if bundled.exists():
-            return str(bundled)
-        toolchain_bin = package_dir / "toolchain" / "bin" / tag / runner
-        if toolchain_bin.exists():
-            return str(toolchain_bin)
-    bundled = package_dir / "bin" / runner
-    if bundled.exists():
-        return str(bundled)
-    toolchain_bin = package_dir / "toolchain" / "bin" / runner
-    if toolchain_bin.exists():
-        return str(toolchain_bin)
-    return "frostbite-run-onchain"
+    return _h.resolve_run_onchain()
 
 
 def _platform_tag() -> str | None:
-    system = platform.system().lower()
-    machine = platform.machine().lower()
-    if system == "darwin":
-        if machine in {"arm64", "aarch64"}:
-            return "darwin-arm64"
-        if machine in {"x86_64", "amd64"}:
-            return "darwin-x64"
-    if system == "linux":
-        if machine in {"x86_64", "amd64"}:
-            return "linux-x64"
-        if machine in {"arm64", "aarch64"}:
-            return "linux-arm64"
-    if system == "windows":
-        if machine in {"x86_64", "amd64"}:
-            return "windows-x64"
-    return None
+    return _h.platform_tag()
 
 
 def _runner_filename() -> str:
-    if platform.system().lower() == "windows":
-        return "frostbite-run-onchain.exe"
-    return "frostbite-run-onchain"
+    return _h.runner_filename()
 
 
 def _build_upload_env(args: argparse.Namespace) -> dict[str, str]:
-    env = os.environ.copy()
-    solana_cfg = _load_solana_cli_config()
-
-    rpc_url = args.rpc_url
-    if not rpc_url and args.cluster:
-        if args.cluster == "surfpool":
-            rpc_url = env.get("SURFPOOL_RPC_URL") or env.get("FROSTBITE_SURFPOOL_RPC_URL")
-            if not rpc_url:
-                raise ValueError("surfpool requires --rpc-url or SURFPOOL_RPC_URL")
-        else:
-            rpc_url = _CLUSTER_URLS.get(args.cluster)
-    if not rpc_url:
-        rpc_url = env.get("FROSTBITE_RPC_URL") or solana_cfg.get("json_rpc_url")
-    if rpc_url:
-        env["FROSTBITE_RPC_URL"] = rpc_url
-
-    if args.payer:
-        env["FROSTBITE_PAYER_KEYPAIR"] = args.payer
-    elif solana_cfg.get("keypair_path"):
-        env.setdefault("FROSTBITE_PAYER_KEYPAIR", solana_cfg["keypair_path"])
-    if args.program_id:
-        env["FROSTBITE_PROGRAM_ID"] = args.program_id
-    elif "FROSTBITE_PROGRAM_ID" not in env:
-        env["FROSTBITE_PROGRAM_ID"] = DEFAULT_PROGRAM_ID
-    return env
+    return _h.build_upload_env(rpc_url=args.rpc_url, cluster=getattr(args, 'cluster', None), payer=args.payer, program_id=args.program_id)
 
 
-_SOURCE_UPLOAD_SUFFIXES = {
-    ".json",
-    ".npz",
-    ".npy",
-    ".pt",
-    ".pth",
-    ".safetensors",
-    ".toml",
-    ".yaml",
-    ".yml",
-    ".csv",
-    ".txt",
-}
+_SOURCE_UPLOAD_SUFFIXES = _h.SOURCE_UPLOAD_SUFFIXES
 
 
 def _validate_upload_inputs(args: argparse.Namespace) -> None:
-    if getattr(args, "allow_raw_upload", False):
-        return
-
-    if args.file:
-        suffix = Path(args.file).suffix.lower()
-        if suffix in _SOURCE_UPLOAD_SUFFIXES:
-            raise ValueError(
-                "upload expects a binary payload (for example weights.bin). "
-                "Convert first with `cauldron convert ... --pack`, then upload weights.bin. "
-                "Pass --allow-raw-upload to bypass this guard."
-            )
-
-    if args.all:
-        suffix = Path(args.all).suffix.lower()
-        if suffix in _SOURCE_UPLOAD_SUFFIXES:
-            raise ValueError(
-                "upload --all pattern appears to target source-format files. "
-                "Chunk/upload binary payloads instead. Pass --allow-raw-upload to bypass this guard."
-            )
+    _h.validate_upload_inputs(file_path=args.file, all_pattern=args.all, allow_raw=getattr(args, 'allow_raw_upload', False))
 
 
 def _cmd_upload(args: argparse.Namespace) -> int:
@@ -2804,26 +2318,15 @@ def _append_seeded_runner_args(
     *,
     payer_keypair: str | None,
 ) -> None:
-    vm_seed = info.get("vm_seed")
-    if not isinstance(vm_seed, str) or not vm_seed:
-        return
-
-    cmd.extend(["--vm-seed", vm_seed])
-
-    accounts = load_accounts(accounts_path)
-    vm = accounts.get("vm") if isinstance(accounts.get("vm"), dict) else {}
-    authority_keypair = vm.get("authority_keypair")
-    if isinstance(authority_keypair, str) and authority_keypair:
-        cmd.extend(["--authority-keypair", _resolve_accounts_path(accounts_path, authority_keypair)])
-        return
-
-    authority = vm.get("authority")
-    if isinstance(authority, str) and authority and payer_keypair:
-        payer_pubkey = resolve_pubkey({"keypair": payer_keypair})
-        if payer_pubkey and payer_pubkey != authority:
-            raise ValueError(
-                "seeded run requires vm.authority_keypair when vm.authority differs from payer signer"
-            )
+    _h.append_seeded_runner_args(
+        cmd,
+        accounts_path,
+        info,
+        payer_keypair=payer_keypair,
+        load_accounts_fn=load_accounts,
+        resolve_accounts_path_fn=_resolve_accounts_path,
+        resolve_pubkey_fn=resolve_pubkey,
+    )
 
 
 def _cmd_program_load(args: argparse.Namespace) -> int:
@@ -2886,10 +2389,7 @@ def _cmd_program_load(args: argparse.Namespace) -> int:
 
 
 def _extract_last_execute_signature(output: str) -> str | None:
-    matches = _EXEC_SIG_RE.findall(output)
-    if not matches:
-        return None
-    return matches[-1]
+    return _h.extract_last_execute_signature(output)
 
 
 def _cmd_invoke(args: argparse.Namespace) -> int:
@@ -3029,6 +2529,16 @@ def _cmd_train(args: argparse.Namespace) -> int:
     from .training.cli import run_train_from_args
 
     return run_train_from_args(args)
+
+
+def _cmd_tui(args: argparse.Namespace) -> int:
+    try:
+        from .tui import launch_tui
+    except ImportError:
+        print("TUI requires textual. Install with: pip install 'frostbite-modelkit[tui]'")
+        return 1
+    project_path = Path(args.project) if args.project else None
+    return launch_tui(project_path=project_path)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -3571,6 +3081,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Percentile for input calibration (writes input_calibration.json)",
     )
     p_train.set_defaults(func=_cmd_train)
+
+    # ── TUI ───────────────────────────────────────────────────────
+    p_tui = sub.add_parser("tui", help="Launch the interactive TUI")
+    p_tui.add_argument("--project", help="Project directory to open")
+    p_tui.set_defaults(func=_cmd_tui)
 
     args = parser.parse_args(argv)
     try:

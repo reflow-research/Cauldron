@@ -1,0 +1,629 @@
+/* ═══════════════════════════════════════════════════════════════
+   CAULDRON TUI — Cyberpunk Neon Theme
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Base ───────────────────────────────────────────────── */
+Screen {
+    background: #0a0e17;
+    color: #e0e6f0;
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+#cauldron-header {
+    dock: top;
+    height: 3;
+    background: #111827;
+    color: #00ffcc;
+    border-bottom: solid #1a3a4a;
+    padding: 0 2;
+}
+
+#cauldron-header .title {
+    color: #00ffcc;
+    text-style: bold;
+}
+
+#cauldron-header .subtitle {
+    color: #8892a4;
+}
+
+#cauldron-header .project-name {
+    color: #ff00aa;
+    text-style: bold;
+}
+
+#cauldron-header .cluster-badge {
+    color: #00ffcc;
+}
+
+/* ── Sidebar ────────────────────────────────────────────── */
+#sidebar, #power-sidebar {
+    dock: left;
+    width: 26;
+    background: #111827;
+    border-right: solid #1a3a4a;
+    padding: 1 0;
+}
+
+.nav-title {
+    color: #8892a4;
+    text-style: bold;
+    padding: 0 2;
+    margin-bottom: 1;
+}
+
+.nav-btn {
+    width: 100%;
+    height: 3;
+    margin: 0 1;
+    background: transparent;
+    color: #8892a4;
+    border: none;
+    content-align: left middle;
+    padding: 0 2;
+}
+
+.nav-btn:hover {
+    background: #1a2332;
+    color: #00ffcc;
+}
+
+.nav-btn.-active {
+    background: #0a2a3a;
+    color: #00ffcc;
+    text-style: bold;
+    border-left: outer #00ffcc;
+}
+
+/* ── Power Screen Layout ───────────────────────────────── */
+#power-layout {
+    height: 1fr;
+}
+
+#power-content {
+    width: 1fr;
+}
+
+#panel-switcher {
+    height: 1fr;
+}
+
+#log-divider {
+    height: 1;
+    color: #1a3a4a;
+    margin: 0 1;
+}
+
+#power-log {
+    min-height: 5;
+    max-height: 12;
+    margin: 0 1 0 1;
+}
+
+/* ── Status Bar ─────────────────────────────────────────── */
+#status-bar {
+    dock: bottom;
+    height: 1;
+    background: #111827;
+    color: #8892a4;
+    border-top: solid #1a3a4a;
+    padding: 0 2;
+}
+
+#status-bar .cluster {
+    color: #00ffcc;
+    text-style: bold;
+}
+
+#status-bar .project-label {
+    color: #ff00aa;
+}
+
+#status-bar .op-status {
+    color: #ffaa00;
+}
+
+/* ── Panels ─────────────────────────────────────────────── */
+.panel {
+    background: #111827;
+    border: solid #1a3a4a;
+    padding: 1 2;
+    margin: 1;
+}
+
+.panel:focus-within {
+    border: solid #00ffcc;
+}
+
+.panel-title {
+    color: #00ffcc;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.panel-section {
+    margin-bottom: 1;
+}
+
+/* ── Forms ──────────────────────────────────────────────── */
+Input {
+    background: #0a0e17;
+    color: #e0e6f0;
+    border: tall #1a3a4a;
+    padding: 0 1;
+}
+
+Input:focus {
+    border: tall #00ffcc;
+}
+
+Input.-invalid {
+    border: tall #ff3366;
+}
+
+.input-label {
+    color: #8892a4;
+    margin-bottom: 0;
+}
+
+Select {
+    background: #0a0e17;
+    color: #e0e6f0;
+    border: tall #1a3a4a;
+}
+
+Select:focus {
+    border: tall #00ffcc;
+}
+
+SelectOverlay {
+    background: #111827;
+    color: #e0e6f0;
+    border: solid #1a3a4a;
+}
+
+SelectOverlay > .option-list--option-highlighted {
+    background: #1a3a4a;
+    color: #00ffcc;
+}
+
+Checkbox {
+    background: transparent;
+    color: #e0e6f0;
+}
+
+Checkbox:focus {
+    color: #00ffcc;
+}
+
+/* ── Buttons ────────────────────────────────────────────── */
+Button {
+    background: #1a2332;
+    color: #e0e6f0;
+    border: tall #1a3a4a;
+    min-width: 16;
+    height: 3;
+}
+
+Button:hover {
+    background: #1a3a4a;
+    color: #00ffcc;
+    border: tall #00ffcc;
+}
+
+Button:focus {
+    border: tall #00ffcc;
+    color: #00ffcc;
+}
+
+Button.-primary {
+    background: #003d33;
+    color: #00ffcc;
+    border: tall #00ffcc;
+    text-style: bold;
+}
+
+Button.-primary:hover {
+    background: #005544;
+}
+
+Button.-success {
+    background: #0a2a0a;
+    color: #39ff14;
+    border: tall #39ff14;
+}
+
+Button.-warning {
+    background: #2a2200;
+    color: #ffaa00;
+    border: tall #ffaa00;
+}
+
+Button.-error {
+    background: #2a0015;
+    color: #ff3366;
+    border: tall #ff3366;
+}
+
+/* ── Log Panel ──────────────────────────────────────────── */
+#log-panel {
+    background: #0a0e17;
+    border: solid #1a3a4a;
+    padding: 0 1;
+    min-height: 6;
+    max-height: 50%;
+}
+
+#log-panel:focus {
+    border: solid #00ffcc;
+}
+
+/* ── Output Viewer ──────────────────────────────────────── */
+#output-viewer {
+    background: #0a0e17;
+    border: solid #1a3a4a;
+    padding: 1 2;
+}
+
+#output-viewer:focus {
+    border: solid #00ffcc;
+}
+
+/* ── Progress Tracker (Wizard) ──────────────────────────── */
+#progress-tracker {
+    height: 3;
+    background: #111827;
+    border-bottom: solid #1a3a4a;
+    padding: 0 2;
+    content-align: center middle;
+}
+
+.step-indicator {
+    color: #1a3a4a;
+}
+
+.step-indicator.-completed {
+    color: #39ff14;
+}
+
+.step-indicator.-active {
+    color: #00ffcc;
+    text-style: bold;
+}
+
+.step-label {
+    color: #8892a4;
+}
+
+.step-label.-active {
+    color: #00ffcc;
+    text-style: bold;
+}
+
+/* ── Project Cards (Home) ───────────────────────────────── */
+.project-card {
+    width: 1fr;
+    height: 9;
+    min-height: 9;
+    background: #1a2332;
+    border: solid #1a3a4a;
+    padding: 0 1;
+    margin: 0;
+}
+
+.project-card:hover {
+    border: solid #00ffcc;
+}
+
+.project-card:focus {
+    border: solid #00ffcc;
+}
+
+.project-card .card-name {
+    color: #00ffcc;
+    text-style: bold;
+}
+
+.project-card .card-template {
+    color: #ff00aa;
+}
+
+.project-card .card-state {
+    color: #8892a4;
+}
+
+.project-card .card-path {
+    color: #708090;
+}
+
+.project-card .card-time {
+    color: #708090;
+}
+
+/* ── Command List ───────────────────────────────────────── */
+.command-list {
+    background: #111827;
+    padding: 0;
+}
+
+.command-item {
+    padding: 0 2;
+    height: 3;
+    background: transparent;
+    color: #e0e6f0;
+    content-align: left middle;
+}
+
+.command-item:hover {
+    background: #1a2332;
+    color: #00ffcc;
+}
+
+.command-item.-highlighted {
+    background: #0a2a3a;
+    color: #00ffcc;
+    text-style: bold;
+    border-left: outer #00ffcc;
+}
+
+.command-item .cmd-key {
+    color: #8892a4;
+}
+
+/* ── Data Table ─────────────────────────────────────────── */
+DataTable {
+    background: #0a0e17;
+    color: #e0e6f0;
+}
+
+DataTable > .datatable--header {
+    background: #111827;
+    color: #00ffcc;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: #1a3a4a;
+    color: #00ffcc;
+}
+
+DataTable > .datatable--even-row {
+    background: #0a0e17;
+}
+
+DataTable > .datatable--odd-row {
+    background: #0d1220;
+}
+
+/* ── Scrollbar ──────────────────────────────────────────── */
+Scrollbar {
+    background: #111827;
+    color: #1a3a4a;
+}
+
+ScrollBar > .scrollbar--bar {
+    color: #1a3a4a;
+}
+
+ScrollBar > .scrollbar--bar:hover {
+    color: #00ffcc;
+}
+
+/* ── Modal / Dialog ─────────────────────────────────────── */
+.modal-dialog {
+    background: #111827;
+    border: solid #00ffcc;
+    padding: 2 4;
+    width: 60;
+    height: auto;
+    max-height: 80%;
+}
+
+.modal-dialog .dialog-title {
+    color: #00ffcc;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+/* ── Home Screen ────────────────────────────────────────── */
+#home-main {
+    height: 1fr;
+}
+
+#home-welcome {
+    text-align: center;
+    width: 100%;
+    height: auto;
+    padding: 1 0;
+}
+
+#home-content {
+    height: 1fr;
+}
+
+#home-carousel-area {
+    width: 1fr;
+    height: 1fr;
+    align: left middle;
+    padding: 0 2;
+}
+
+#carousel-wrapper {
+    width: 100%;
+    max-width: 64;
+    height: auto;
+}
+
+#home-hint {
+    text-align: left;
+    width: 100%;
+    height: auto;
+    margin-bottom: 1;
+}
+
+#card-carousel {
+    width: 100%;
+    height: auto;
+}
+
+.carousel-arrow {
+    width: 3;
+    height: 9;
+    content-align: center middle;
+    color: #555e6e;
+}
+
+#card-display {
+    width: 1fr;
+    height: auto;
+    min-height: 9;
+}
+
+#card-display ProjectCard {
+    width: 100%;
+}
+
+#carousel-indicator {
+    text-align: center;
+    width: 100%;
+    height: auto;
+    margin-top: 1;
+}
+
+#home-cauldron {
+    width: 46;
+    height: 1fr;
+    content-align: center bottom;
+    padding: 0 1;
+}
+
+#home-actions {
+    height: auto;
+    padding: 1 2;
+    background: #111827;
+    border-top: solid #1a3a4a;
+}
+
+/* ── Mode Selector (Home) ───────────────────────────────── */
+.mode-btn {
+    min-width: 20;
+    height: 3;
+    margin: 0 1;
+}
+
+.mode-btn.-wizard {
+    background: #003d33;
+    color: #00ffcc;
+    border: tall #00ffcc;
+}
+
+.mode-btn.-power {
+    background: #2a0040;
+    color: #ff00aa;
+    border: tall #ff00aa;
+}
+
+.mode-btn.-wizard:hover {
+    background: #005544;
+}
+
+.mode-btn.-power:hover {
+    background: #3d0055;
+}
+
+/* ── Wizard Layout ──────────────────────────────────────── */
+#wizard-content {
+    height: 1fr;
+    min-height: 4;
+    padding: 1 2;
+}
+
+#wizard-bottom {
+    dock: bottom;
+    height: 7;
+    min-height: 3;
+    max-height: 8;
+    background: #111827;
+    border-top: solid #1a3a4a;
+    padding: 0 1;
+}
+
+#wizard-nav {
+    layout: horizontal;
+    height: 3;
+    min-height: 3;
+    padding: 0 1;
+    background: transparent;
+    border: none;
+}
+
+#wizard-nav Button {
+    width: 1fr;
+    min-width: 0;
+    height: 3;
+}
+
+#wizard-log {
+    height: 1fr;
+    min-height: 0;
+    max-height: 5;
+    background: transparent;
+    padding: 0 1;
+    border-top: solid #1a3a4a;
+}
+
+/* ── Settings ───────────────────────────────────────────── */
+.settings-group {
+    margin-bottom: 2;
+}
+
+.settings-group .group-title {
+    color: #ff00aa;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+/* ── OptionList ─────────────────────────────────────────── */
+OptionList {
+    background: #0a0e17;
+    color: #e0e6f0;
+    border: tall #1a3a4a;
+}
+
+OptionList:focus {
+    border: tall #00ffcc;
+}
+
+OptionList > .option-list--option-highlighted {
+    background: #1a3a4a;
+    color: #00ffcc;
+    text-style: bold;
+}
+
+OptionList > .option-list--option-hover {
+    background: #1a2332;
+    color: #00ffcc;
+}
+
+/* ── Toast / Notification ───────────────────────────────── */
+Toast {
+    background: #111827;
+    color: #e0e6f0;
+    border: solid #1a3a4a;
+}
+
+Toast.-information {
+    border: solid #00ffcc;
+}
+
+Toast.-success {
+    border: solid #39ff14;
+}
+
+Toast.-warning {
+    border: solid #ffaa00;
+}
+
+Toast.-error {
+    border: solid #ff3366;
+}
