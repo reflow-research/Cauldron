@@ -29,37 +29,46 @@ _BUBBLE_FRAMES = [
     ],
 ]
 
-# ── Cauldron parts (all lines centered at position 19.5 on a 40-char canvas) ──
+# ── Cauldron parts (platformer side view, centered on 40-char canvas) ──
 
-_RIM = f"[#555e6e]     ▄▄[/][#8892a4]{'█' * 26}[/][#555e6e]▄▄[/]"
+_RIM = f"[#555e6e]        ▄▄[/][#8892a4]{'▄' * 20}[/][#555e6e]▄▄[/]"
 
+# Single thin liquid line — just barely visible at the rim (side view)
 _LIQUID_A = [
-    f"[#8892a4]    ██[/][#00ffcc]{'░▒' * 14}[/][#8892a4]██[/]",
-    f"[#8892a4]  ▄██[/][#00ffcc]{'░▒' * 15}[/][#8892a4]██▄[/]",
+    f"[#8892a4]        █[/][#00ffcc]{'░▒' * 11}[/][#8892a4]█[/]",
 ]
 
 _LIQUID_B = [
-    f"[#8892a4]    ██[/][#00ffcc]{'▒░' * 14}[/][#8892a4]██[/]",
-    f"[#8892a4]  ▄██[/][#00ffcc]{'▒░' * 15}[/][#8892a4]██▄[/]",
+    f"[#8892a4]        █[/][#00ffcc]{'▒░' * 11}[/][#8892a4]█[/]",
 ]
 
 _BODY = [
-    # Handles — 30 inner blocks
-    f" [#8892a4]▐██ {'█' * 30} ██▌[/]",
-    f" [#8892a4]▐██ {'█' * 30} ██▌[/]",
-    # Widest body — 40 blocks
-    f"[#8892a4]{'█' * 40}[/]",
-    f"[#8892a4]{'█' * 40}[/]",
-    f"[#8892a4]{'█' * 40}[/]",
-    f"[#8892a4]{'█' * 40}[/]",
-    # Taper — symmetric narrowing
-    f"[#8892a4]  {'█' * 36}[/]",
-    f"[#8892a4]   {'█' * 34}[/]",
-    f"[#555e6e]    {'█' * 32}[/]",
-    f"[#555e6e]      {'█' * 28}[/]",
+    # Rim lip — solid flare wider than opening
+    f"[#8892a4]     ▄{'█' * 28}▄[/]",
+    # Wireframe transition — green drips start
+    f"[#8892a4]  ██[/][#00ffcc]░[/]{' ' * 30}[#00ffcc]░[/][#8892a4]██[/]",
+    # Handle line — green drips continue
+    f" [#8892a4]▐██[/][#00ffcc]░[/]{' ' * 30}[#00ffcc]░[/][#8892a4]██▌[/]",
+    # Body — drips fading
+    f"[#8892a4]██[/][#00ffcc]░[/]{' ' * 34}[#00ffcc]░[/][#8892a4]██[/]",
+    f"[#8892a4]██[/][#00ffcc dim]░[/]{' ' * 34}[#00ffcc dim]░[/][#8892a4]██[/]",
+    # Body — clean middle
+    f"[#8892a4]██[/]{' ' * 36}[#8892a4]██[/]",
+    # Taper — heat glow building from the fire
+    f"[#8892a4]  ██[/][#ffaa00 dim]░[/]{' ' * 30}[#ffaa00 dim]░[/][#8892a4]██[/]",
+    f"[#555e6e]    ██[/][#ffaa00]░[/]{' ' * 26}[#ffaa00]░[/][#555e6e]██[/]",
+    f"[#555e6e]      ██[/][#ffaa00]░▒[/]{' ' * 20}[#ffaa00]▒░[/][#555e6e]██[/]",
+    # Bottom — solid to close the shape
     f"[#555e6e]       {'█' * 26}[/]",
-    # Stubby feet + fire combined on one line — no gap
+]
+
+# ── Smoldering fire frames (subtle flicker) ──
+
+_FIRE_FRAMES = [
     f"[#555e6e]      ████[/] [#ffaa00]░▒░▒░[/] [#ff3366]░▒░▒░▒[/] [#ffaa00]░▒░▒░[/] [#555e6e]████[/]",
+    f"[#555e6e]      ████[/] [#ffaa00]▒░▒░▒[/] [#ff3366]▒░▒░▒░[/] [#ffaa00]▒░▒░▒[/] [#555e6e]████[/]",
+    f"[#555e6e]      ████[/] [#ff3366]░▒░▒░[/] [#ffaa00]░▒░▒░▒[/] [#ff3366]░▒░▒░[/] [#555e6e]████[/]",
+    f"[#555e6e]      ████[/] [#ff3366]▒░▒░▒[/] [#ffaa00]▒░▒░▒░[/] [#ff3366]▒░▒░▒[/] [#555e6e]████[/]",
 ]
 
 
@@ -89,5 +98,6 @@ class BubblingCauldron(Static):
     def _build_art(self, frame: int) -> str:
         bubbles = _BUBBLE_FRAMES[frame]
         liquid = _LIQUID_A if frame % 2 == 0 else _LIQUID_B
-        lines = bubbles + [_RIM] + liquid + _BODY
+        fire = _FIRE_FRAMES[frame % len(_FIRE_FRAMES)]
+        lines = bubbles + [_RIM] + liquid + _BODY + [fire]
         return "\n".join(lines)

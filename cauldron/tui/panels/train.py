@@ -9,7 +9,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Button, Checkbox, Input, Select, Static
 
-from ..commands import TEMPLATES, cmd_train
+from ..commands import cmd_train
 from ..widgets.command_list import CommandItem, CommandList
 
 
@@ -84,19 +84,57 @@ class TrainPanel(Widget):
 
     def on_command_list_selected(self, event: CommandList.Selected) -> None:
         if event.key == "train":
-            try:
-                self.query_one("#train-form").add_class("-visible")
-            except Exception:
-                pass
+            self._show_train_form()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-train-start":
             self._run_train()
         elif event.button.id == "btn-train-cancel":
-            try:
-                self.query_one("#train-form").remove_class("-visible")
-            except Exception:
-                pass
+            self._hide_train_form()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        input_id = event.input.id or ""
+        if input_id == "train-data-path":
+            self._focus_input("#train-label-col")
+        elif input_id == "train-label-col":
+            self._focus_input("#train-epochs")
+        elif input_id == "train-epochs":
+            self._focus_input("#train-lr")
+        elif input_id == "train-lr":
+            self._focus_input("#train-hidden-dim")
+        elif input_id == "train-hidden-dim":
+            self._run_train()
+
+    def _show_train_form(self) -> None:
+        self._set_command_compact(True)
+        try:
+            self.query_one("#train-form").add_class("-visible")
+            self.call_after_refresh(self._focus_input, "#train-data-path")
+        except Exception:
+            pass
+
+    def _hide_train_form(self) -> None:
+        try:
+            self.query_one("#train-form").remove_class("-visible")
+        except Exception:
+            pass
+        self._set_command_compact(False)
+
+    def _focus_input(self, selector: str) -> None:
+        try:
+            self.query_one(selector, Input).focus()
+        except Exception:
+            pass
+
+    def _set_command_compact(self, compact: bool) -> None:
+        try:
+            command_list = self.query_one("#train-commands")
+            if compact:
+                command_list.add_class("-compact")
+            else:
+                command_list.remove_class("-compact")
+        except Exception:
+            pass
 
     def _run_train(self) -> None:
         app_state = self.app.app_state  # type: ignore[attr-defined]
@@ -152,10 +190,7 @@ class TrainPanel(Widget):
         if result.success:
             self._show_result(f"[#39ff14]{result.message}[/]")
             self._log_success(result.message)
-            try:
-                self.query_one("#train-form").remove_class("-visible")
-            except Exception:
-                pass
+            self._hide_train_form()
         else:
             self._show_result(f"[#ff3366]{result.message}[/]")
             self._log_error(result.message)
@@ -168,9 +203,9 @@ class TrainPanel(Widget):
 
     def _get_log(self):
         try:
-            from ..screens.power import PowerScreen
+            from ..screens.manual import ManualScreen
             screen = self.screen
-            if isinstance(screen, PowerScreen):
+            if isinstance(screen, ManualScreen):
                 return screen.get_log()
         except Exception:
             pass

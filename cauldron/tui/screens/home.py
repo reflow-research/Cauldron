@@ -28,6 +28,14 @@ _WELCOME_ART = r"""[#00ffcc]
 [#8892a4]AI inference on Solana[/]
 """
 
+_DIVIDER = (
+    "[#1a3a4a]────────────────[/]"
+    "[#555e6e]═══╣[/] "
+    "[#00ffcc]◆[/]"
+    " [#555e6e]╠═══[/]"
+    "[#1a3a4a]────────────────[/]"
+)
+
 
 class HomeScreen(Screen):
     """Main landing screen — shows projects and mode selection."""
@@ -74,6 +82,7 @@ class HomeScreen(Screen):
                             )
                         yield Static("", id="carousel-indicator")
                 yield BubblingCauldron(id="home-cauldron")
+            yield Static(_DIVIDER, id="home-divider")
             with Horizontal(id="home-actions"):
                 yield Button("New Project", id="btn-new", variant="primary")
                 yield Button("Import Existing", id="btn-import")
@@ -246,7 +255,7 @@ class HomeScreen(Screen):
 
 
 class ModePickerScreen(Screen):
-    """Simple mode picker: Wizard or Power User."""
+    """Simple mode picker: Wizard or Manual."""
 
     DEFAULT_CSS = """
     ModePickerScreen {
@@ -279,7 +288,7 @@ class ModePickerScreen(Screen):
 
     BINDINGS = [
         Binding("w", "wizard", "Wizard", show=False),
-        Binding("p", "power", "Power", show=False),
+        Binding("m", "manual", "Manual", show=False),
         Binding("escape", "cancel", "Cancel"),
         Binding("up", "focus_previous", "Up", show=False, priority=True),
         Binding("down", "focus_next", "Down", show=False, priority=True),
@@ -297,19 +306,19 @@ class ModePickerScreen(Screen):
             yield Static(f"[#ff00aa]{self._project.name}[/]", classes="mode-project")
             yield Static(
                 "[#8892a4]Wizard guides you step-by-step through deployment.\n"
-                "Power Mode gives full panel access to all operations.[/]",
+                "Manual Mode gives full panel access to all operations.[/]",
             )
             yield Static("")
             with Horizontal(classes="mode-buttons"):
                 yield Button("Wizard (W)", id="btn-mode-wizard", classes="mode-btn -wizard")
-                yield Button("Power (P)", id="btn-mode-power", classes="mode-btn -power")
+                yield Button("Manual (M)", id="btn-mode-manual", classes="mode-btn -manual")
         yield Footer()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-mode-wizard":
             self.action_wizard()
-        elif event.button.id == "btn-mode-power":
-            self.action_power()
+        elif event.button.id == "btn-mode-manual":
+            self.action_manual()
 
     def on_mount(self) -> None:
         try:
@@ -323,11 +332,11 @@ class ModePickerScreen(Screen):
         self.app.pop_screen()
         self.app.push_screen(WizardScreen(project=self._project))
 
-    def action_power(self) -> None:
-        from .power import PowerScreen
+    def action_manual(self) -> None:
+        from .manual import ManualScreen
 
         self.app.pop_screen()
-        self.app.push_screen(PowerScreen())
+        self.app.push_screen(ManualScreen())
 
     def action_cancel(self) -> None:
         self.app.pop_screen()

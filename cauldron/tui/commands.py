@@ -6,6 +6,7 @@ Subprocess operations accept an optional on_progress callback.
 
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,7 +17,14 @@ from ..validate import validate_manifest
 from ..pack import pack_manifest
 from ..chunk import chunk_manifest, chunk_file
 from ..schema import schema_hash32, format_hash32, update_manifest_schema_hash
-from ..accounts import load_accounts, write_accounts, parse_segments
+from ..accounts import (
+    derive_vm_pda,
+    load_accounts,
+    parse_segments,
+    resolve_authority_pubkey,
+    write_accounts,
+)
+from ..constants import DEFAULT_PROGRAM_ID
 from ..helpers import (
     apply_accounts_env,
     append_seeded_runner_args,
@@ -33,7 +41,10 @@ from ..helpers import (
     validate_vm_authority_binding,
     wait_for_signature_slot,
     write_account,
+    rpc_request_raw,
 )
+from .registry import list_projects
+from .runtime import resolve_runtime_context
 
 ProgressCallback = Callable[[str, float | None], None]
 
@@ -120,6 +131,239 @@ def _normalize_decoded_output(decoded: str) -> Any:
         return json.loads(decoded)
     except Exception:
         return decoded
+
+
+def _normalize_rpc_url(url: str | None) -> str:
+    if isinstance(url, str):
+        cleaned = url.strip().rstrip("/")
+        if cleaned:
+            return cleaned
+    return "<unspecified-rpc>"
+
+
+def _resolve_project_accounts_path(project: Any) -> Path | None:
+    accounts_path = getattr(project, "accounts_path", None)
+    if not isinstance(accounts_path, Path):
+        return None
+    if accounts_path.is_absolute():
+        return accounts_path
+    project_path = getattr(project, "path", None)
+    if isinstance(project_path, Path):
+        return project_path / accounts_path
+    return accounts_path
+
+
+@dataclass(frozen=True)
+class _SeedFingerprint:
+    rpc_url: str
+    program_id: str
+    authority_pubkey: str
+    vm_seed: str
+    vm_pubkey: str
+
+
+def _build_seed_fingerprint_from_values(
+    *,
+    vm_seed: int,
+    program_id: str,
+    authority_pubkey: str,
+    rpc_url: str | None,
+) -> _SeedFingerprint:
+    return _SeedFingerprint(
+        rpc_url=_normalize_rpc_url(rpc_url),
+        program_id=program_id,
+        authority_pubkey=authority_pubkey,
+        vm_seed=str(vm_seed),
+        vm_pubkey=derive_vm_pda(program_id, authority_pubkey, vm_seed),
+    )
+
+
+def _build_seed_fingerprint_from_accounts(
+    accounts_path: Path,
+    *,
+    rpc_url: str | None = None,
+    program_id: str | None = None,
+    payer: str | None = None,
+) -> _SeedFingerprint | None:
+    info, _ = accounts_segment_metas(
+        str(accounts_path),
+        program_id_override=program_id,
+        payer_override=payer,
+    )
+    vm_seed = info.get("vm_seed")
+    authority_pubkey = info.get("authority_pubkey")
+    vm_pubkey = info.get("vm_pubkey")
+    effective_program_id = program_id or info.get("program_id")
+    if not (
+        isinstance(vm_seed, str)
+        and vm_seed
+        and isinstance(authority_pubkey, str)
+        and authority_pubkey
+        and isinstance(vm_pubkey, str)
+        and vm_pubkey
+        and isinstance(effective_program_id, str)
+        and effective_program_id
+    ):
+        return None
+    return _SeedFingerprint(
+        rpc_url=_normalize_rpc_url(rpc_url or info.get("rpc_url")),
+        program_id=effective_program_id,
+        authority_pubkey=authority_pubkey,
+        vm_seed=vm_seed,
+        vm_pubkey=vm_pubkey,
+    )
+
+
+def _find_seed_collision_for_fingerprint(
+    *,
+    current_fp: _SeedFingerprint,
+    project_path: Path | None = None,
+) -> tuple[Any, _SeedFingerprint] | None:
+    current_project_path = project_path.resolve() if isinstance(project_path, Path) else None
+
+    for project in list_projects():
+        other_project_path = getattr(project, "path", None)
+        if isinstance(other_project_path, Path):
+            if current_project_path and other_project_path.resolve() == current_project_path:
+                continue
+        other_accounts_path = _resolve_project_accounts_path(project)
+        if not isinstance(other_accounts_path, Path) or not other_accounts_path.exists():
+            continue
+        try:
+            context = resolve_runtime_context(project)
+            other_fp = _build_seed_fingerprint_from_accounts(
+                other_accounts_path,
+                rpc_url=context.rpc_url,
+                program_id=context.program_id,
+                payer=context.payer,
+            )
+        except Exception:
+            continue
+        if other_fp is None:
+            continue
+        if (
+            other_fp.rpc_url == current_fp.rpc_url
+            and other_fp.program_id == current_fp.program_id
+            and other_fp.authority_pubkey == current_fp.authority_pubkey
+            and other_fp.vm_seed == current_fp.vm_seed
+        ):
+            return project, other_fp
+    return None
+
+
+def _detect_seed_collision(
+    *,
+    accounts_path: Path,
+    project_path: Path | None = None,
+    rpc_url: str | None = None,
+    program_id: str | None = None,
+    payer: str | None = None,
+) -> tuple[Any, _SeedFingerprint] | None:
+    try:
+        current_fp = _build_seed_fingerprint_from_accounts(
+            accounts_path,
+            rpc_url=rpc_url,
+            program_id=program_id,
+            payer=payer,
+        )
+    except Exception:
+        return None
+    if current_fp is None:
+        return None
+
+    return _find_seed_collision_for_fingerprint(
+        current_fp=current_fp,
+        project_path=project_path,
+    )
+
+
+def _parse_mapped_pubkeys(mapped_lines: list[str]) -> list[str]:
+    pubkeys: list[str] = []
+    for line in mapped_lines:
+        if not isinstance(line, str) or ":" not in line:
+            continue
+        _, pubkey = line.split(":", 1)
+        value = pubkey.strip()
+        if value:
+            pubkeys.append(value)
+    return pubkeys
+
+
+def _fetch_account_snapshot(rpc_url: str, pubkey: str) -> dict[str, Any]:
+    payload = rpc_request_raw(
+        rpc_url,
+        "getAccountInfo",
+        [pubkey, {"encoding": "base64", "commitment": "confirmed"}],
+    )
+    error = payload.get("error")
+    if error is not None:
+        raise ValueError(f"RPC error: {error}")
+    result = payload.get("result")
+    value = result.get("value") if isinstance(result, dict) else None
+    if value is None:
+        raise ValueError("account not found")
+    if not isinstance(value, dict):
+        raise ValueError("unexpected account payload")
+
+    data = value.get("data")
+    raw_data = ""
+    if isinstance(data, list) and data and isinstance(data[0], str):
+        raw_data = data[0]
+    elif isinstance(data, str):
+        raw_data = data
+
+    try:
+        decoded = base64.b64decode(raw_data, validate=False) if raw_data else b""
+    except Exception as exc:
+        raise ValueError(f"unable to decode account data: {exc}") from exc
+
+    return {
+        "owner": value.get("owner"),
+        "lamports": value.get("lamports"),
+        "data_len": len(decoded),
+        "executable": bool(value.get("executable", False)),
+    }
+
+
+def _audit_seeded_accounts_on_chain(
+    *,
+    rpc_url: str | None,
+    program_id: str | None,
+    expected_pubkeys: list[str],
+) -> tuple[list[str], dict[str, dict[str, Any]]]:
+    if not isinstance(rpc_url, str) or not rpc_url.strip():
+        return ["Missing RPC URL for post-create verification"], {}
+    if not isinstance(program_id, str) or not program_id.strip():
+        return ["Missing program ID for post-create verification"], {}
+    if not expected_pubkeys:
+        return ["No accounts supplied for post-create verification"], {}
+
+    seen: set[str] = set()
+    ordered_expected: list[str] = []
+    for pubkey in expected_pubkeys:
+        if pubkey and pubkey not in seen:
+            ordered_expected.append(pubkey)
+            seen.add(pubkey)
+
+    errors: list[str] = []
+    snapshots: dict[str, dict[str, Any]] = {}
+    for pubkey in ordered_expected:
+        try:
+            snapshot = _fetch_account_snapshot(rpc_url, pubkey)
+        except Exception as exc:
+            errors.append(f"{pubkey}: {exc}")
+            continue
+        snapshots[pubkey] = snapshot
+
+        owner = snapshot.get("owner")
+        if owner != program_id:
+            errors.append(f"{pubkey}: owner mismatch ({owner} != {program_id})")
+
+        data_len = snapshot.get("data_len")
+        if not isinstance(data_len, int) or data_len <= 0:
+            errors.append(f"{pubkey}: empty account data")
+
+    return errors, snapshots
 
 
 # ── Validate ──────────────────────────────────────────────────────
@@ -541,11 +785,11 @@ def cmd_accounts_init(
     entry_pc: int | None = None,
     ram_count: int = 1,
     ram_bytes: int = 262_144,
+    project_path: Path | None = None,
+    allow_seed_reuse: bool = False,
 ) -> CommandResult:
     """Generate accounts configuration (PDA mode)."""
     import secrets
-
-    from ..constants import DEFAULT_PROGRAM_ID
 
     try:
         cfg = load_solana_cli_config()
@@ -596,11 +840,75 @@ def cmd_accounts_init(
             segments.append(seg)
 
         data = {"cluster": cluster, "vm": vm_entry, "segments": segments}
+        if not allow_seed_reuse:
+            candidate_project_path = project_path
+            if candidate_project_path is None:
+                if manifest_path:
+                    candidate_project_path = manifest_path.parent
+                else:
+                    candidate_project_path = effective_out.parent
+
+            candidate_seed = vm_entry.get("seed")
+            candidate_program_id = cluster.get("program_id")
+            payer_override = cluster.get("payer")
+            try:
+                authority_pubkey = resolve_authority_pubkey(
+                    data,
+                    authority_keypair_override=payer_override if isinstance(payer_override, str) else None,
+                )
+            except Exception:
+                authority_pubkey = None
+
+            if (
+                isinstance(candidate_seed, int)
+                and isinstance(candidate_program_id, str)
+                and candidate_program_id
+                and isinstance(authority_pubkey, str)
+                and authority_pubkey
+            ):
+                collision = None
+                try:
+                    candidate_fp = _build_seed_fingerprint_from_values(
+                        vm_seed=candidate_seed,
+                        program_id=candidate_program_id,
+                        authority_pubkey=authority_pubkey,
+                        rpc_url=cluster.get("rpc_url"),
+                    )
+                    collision = _find_seed_collision_for_fingerprint(
+                        current_fp=candidate_fp,
+                        project_path=candidate_project_path,
+                    )
+                except Exception:
+                    collision = None
+                if collision is not None:
+                    other_project, _ = collision
+                    other_name = getattr(other_project, "name", "<unknown>")
+                    other_path = getattr(other_project, "path", "<unknown>")
+                    return CommandResult(
+                        success=False,
+                        message=(
+                            "Seed collision blocked: vm.seed + authority + program already "
+                            f"registered by project '{other_name}' at {other_path}"
+                        ),
+                        data={
+                            "vm_seed": candidate_seed,
+                            "authority_pubkey": authority_pubkey,
+                            "program_id": candidate_program_id,
+                            "rpc_url": cluster.get("rpc_url"),
+                        },
+                    )
+
         write_accounts(effective_out, data)
         return CommandResult(
             success=True,
             message=f"Accounts written to {effective_out}",
-            data={"path": str(effective_out), "vm_seed": vm_entry["seed"]},
+            data={
+                "path": str(effective_out),
+                "vm_seed": vm_entry["seed"],
+                "rpc_url": cluster.get("rpc_url"),
+                "program_id": cluster.get("program_id"),
+                "payer": cluster.get("payer"),
+            },
         )
     except Exception as exc:
         return CommandResult(success=False, message=str(exc))
@@ -616,14 +924,15 @@ def cmd_accounts_create(
     payer: str | None = None,
     ram_bytes: int = 262_144,
     on_progress: ProgressCallback | None = None,
+    project_path: Path | None = None,
+    allow_seed_reuse: bool = False,
 ) -> CommandResult:
     """Create on-chain accounts (PDA mode via Rust tools)."""
     import os
     import subprocess
 
-    from ..constants import DEFAULT_PROGRAM_ID
-
     try:
+        cfg = load_solana_cli_config()
         info, mapped_lines = accounts_segment_metas(
             str(accounts_path),
             program_id_override=program_id,
@@ -638,23 +947,57 @@ def cmd_accounts_create(
         validate_vm_authority_binding(str(accounts_path), vm)
         segments = parse_segments(accounts)
 
+        effective_rpc = rpc_url or info.get("rpc_url") or cfg.get("json_rpc_url")
+        effective_payer = payer or info.get("payer") or cfg.get("keypair_path")
+        effective_pid = program_id or info.get("program_id") or DEFAULT_PROGRAM_ID
+
+        if not allow_seed_reuse:
+            collision = _detect_seed_collision(
+                accounts_path=accounts_path,
+                project_path=project_path or accounts_path.parent,
+                rpc_url=effective_rpc,
+                program_id=effective_pid,
+                payer=effective_payer if isinstance(effective_payer, str) else None,
+            )
+            if collision is not None:
+                other_project, other_fp = collision
+                other_name = getattr(other_project, "name", "<unknown>")
+                other_path = getattr(other_project, "path", "<unknown>")
+                return CommandResult(
+                    success=False,
+                    message=(
+                        "Seed collision blocked: this accounts file resolves to an existing VM used "
+                        f"by project '{other_name}' at {other_path}"
+                    ),
+                    data={
+                        "vm_seed": other_fp.vm_seed,
+                        "authority_pubkey": other_fp.authority_pubkey,
+                        "vm_pubkey": other_fp.vm_pubkey,
+                        "program_id": other_fp.program_id,
+                        "rpc_url": other_fp.rpc_url,
+                    },
+                )
+
         segment_specs: list[str] = []
+        created_slots: set[int] = set()
+        skipped_weights_without_size = False
         for seg in segments:
             kind = seg.kind.strip().lower()
             if kind == "ram":
                 payload = seg.bytes if isinstance(seg.bytes, int) and seg.bytes > 0 else ram_bytes
                 segment_specs.append(f"ram:{seg.slot}:{payload}")
+                created_slots.add(seg.slot)
             elif kind == "weights" and isinstance(seg.bytes, int) and seg.bytes > 0:
                 segment_specs.append(f"weights:{seg.slot}:{seg.bytes}")
+                created_slots.add(seg.slot)
+            elif kind == "weights":
+                skipped_weights_without_size = True
 
         env = os.environ.copy()
-        effective_rpc = rpc_url or info.get("rpc_url")
         if effective_rpc:
             env["FROSTBITE_RPC_URL"] = effective_rpc
-        effective_payer = payer or info.get("payer")
         if isinstance(effective_payer, str):
             env["FROSTBITE_PAYER_KEYPAIR"] = effective_payer
-        effective_pid = program_id or info.get("program_id")
         if isinstance(effective_pid, str):
             env["FROSTBITE_PROGRAM_ID"] = effective_pid
         elif "FROSTBITE_PROGRAM_ID" not in env:
@@ -689,7 +1032,63 @@ def cmd_accounts_create(
             logs.extend(proc.stderr.strip().splitlines())
 
         if proc.returncode == 0:
-            return CommandResult(success=True, message="Accounts created", logs=logs)
+            if skipped_weights_without_size:
+                logs.append(
+                    "Note: weights segment has no bytes in accounts file; it will be created during upload."
+                )
+
+            mapped_pubkeys = _parse_mapped_pubkeys(mapped_lines)
+            sorted_segments = sorted(segments, key=lambda seg: seg.slot)
+            slot_to_pubkey: dict[int, str] = {}
+            for idx, seg in enumerate(sorted_segments):
+                if idx < len(mapped_pubkeys):
+                    slot_to_pubkey[seg.slot] = mapped_pubkeys[idx]
+
+            expected_pubkeys: list[str] = []
+            vm_pubkey = info.get("vm_pubkey")
+            if isinstance(vm_pubkey, str) and vm_pubkey:
+                expected_pubkeys.append(vm_pubkey)
+            for slot in sorted(created_slots):
+                pubkey = slot_to_pubkey.get(slot)
+                if pubkey:
+                    expected_pubkeys.append(pubkey)
+
+            verify_errors, snapshots = _audit_seeded_accounts_on_chain(
+                rpc_url=effective_rpc if isinstance(effective_rpc, str) else None,
+                program_id=effective_pid if isinstance(effective_pid, str) else None,
+                expected_pubkeys=expected_pubkeys,
+            )
+            if verify_errors:
+                logs.append("Post-create verification failed:")
+                logs.extend(f"  {line}" for line in verify_errors)
+                return CommandResult(
+                    success=False,
+                    message="Accounts created but verification failed on target RPC",
+                    logs=logs,
+                    data={
+                        "rpc_url": effective_rpc,
+                        "program_id": effective_pid,
+                        "expected_accounts": expected_pubkeys,
+                        "snapshots": snapshots,
+                    },
+                )
+
+            logs.append(
+                "Verified "
+                f"{len(expected_pubkeys)} account(s) on "
+                f"{_normalize_rpc_url(effective_rpc if isinstance(effective_rpc, str) else None)}"
+            )
+            return CommandResult(
+                success=True,
+                message="Accounts created and verified",
+                logs=logs,
+                data={
+                    "rpc_url": effective_rpc,
+                    "program_id": effective_pid,
+                    "verified_accounts": expected_pubkeys,
+                    "snapshots": snapshots,
+                },
+            )
         return CommandResult(success=False, message=f"Account creation failed (rc={proc.returncode})", logs=logs)
     except Exception as exc:
         return CommandResult(success=False, message=str(exc))

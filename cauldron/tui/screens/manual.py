@@ -1,4 +1,4 @@
-"""PowerScreen — panel-based power-user mode with sidebar navigation."""
+"""ManualScreen — panel-based manual mode with sidebar navigation."""
 
 from __future__ import annotations
 
@@ -20,17 +20,17 @@ from ..panels.invoke import InvokePanel
 from ..panels.train import TrainPanel
 
 
-class PowerScreen(Screen):
-    """Power-user mode with sidebar navigation and action panels."""
+class ManualScreen(Screen):
+    """Manual mode with sidebar navigation and action panels."""
 
     BINDINGS = [
         Binding("1", "switch_panel('models')", "Models", show=False),
-        Binding("2", "switch_panel('weights')", "Weights", show=False),
-        Binding("3", "switch_panel('accounts')", "Accounts", show=False),
-        Binding("4", "switch_panel('invoke')", "Invoke", show=False),
-        Binding("5", "switch_panel('train')", "Train", show=False),
+        Binding("2", "switch_panel('train')", "Train", show=False),
+        Binding("3", "switch_panel('weights')", "Weights", show=False),
+        Binding("4", "switch_panel('accounts')", "Accounts", show=False),
+        Binding("5", "switch_panel('invoke')", "Invoke", show=False),
         Binding("c", "copy_context", "Copy Context", show=False),
-        Binding("escape", "go_home", "Home"),
+        Binding("escape", "back", "Back"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -41,22 +41,22 @@ class PowerScreen(Screen):
             header.cluster_name = app_state.active_project.cluster or "devnet"
         yield header
 
-        with Horizontal(id="power-layout"):
-            yield Sidebar(id="power-sidebar")
+        with Horizontal(id="manual-layout"):
+            yield Sidebar(id="manual-sidebar")
 
-            with Vertical(id="power-content"):
+            with Vertical(id="manual-content"):
                 with ContentSwitcher(id="panel-switcher", initial="models"):
                     yield ModelsPanel(id="models")
+                    yield TrainPanel(id="train")
                     yield WeightsPanel(id="weights")
                     yield AccountsPanel(id="accounts")
                     yield InvokePanel(id="invoke")
-                    yield TrainPanel(id="train")
 
                 yield Static(
                     "[#1a3a4a]─── LOG ─────────────────────────────────────────[/]",
                     id="log-divider",
                 )
-                yield LogPanel(id="power-log")
+                yield LogPanel(id="manual-log")
 
         sb = StatusBar()
         if app_state.active_project:
@@ -66,10 +66,12 @@ class PowerScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.get_log().log_info("Power mode active. Use sidebar or keys 1-5 to navigate panels.")
+        self.get_log().log_info("Manual mode active. Use sidebar or keys 1-5 to navigate panels.")
+        self.call_after_refresh(self.action_focus_categories)
 
     def on_sidebar_panel_selected(self, event: Sidebar.PanelSelected) -> None:
         self._switch_to(event.panel_id)
+        self.call_after_refresh(self._focus_panel_entry, event.panel_id)
 
     def action_switch_panel(self, panel_id: str) -> None:
         self._switch_to(panel_id)
@@ -78,7 +80,7 @@ class PowerScreen(Screen):
         try:
             switcher = self.query_one("#panel-switcher", ContentSwitcher)
             switcher.current = panel_id
-            sidebar = self.query_one("#power-sidebar", Sidebar)
+            sidebar = self.query_one("#manual-sidebar", Sidebar)
             sidebar.active_panel = panel_id
             self._update_status_op(panel_id)
         except Exception:
@@ -96,6 +98,38 @@ class PowerScreen(Screen):
             self.app.action_home()
         else:
             self.app.pop_screen()
+
+    def action_focus_categories(self) -> None:
+        """Move focus back to manual mode categories (sidebar)."""
+        try:
+            sidebar = self.query_one("#manual-sidebar", Sidebar)
+            sidebar.focus_active_item()
+        except Exception:
+            pass
+
+    def action_back(self) -> None:
+        """Escape: focus sidebar first, then go home on second press."""
+        try:
+            sidebar = self.query_one("#manual-sidebar", Sidebar)
+            if sidebar.has_focus or sidebar.query("*:focus"):
+                self.action_go_home()
+            else:
+                self.action_focus_categories()
+        except Exception:
+            self.action_go_home()
+
+    def _focus_panel_entry(self, panel_id: str) -> None:
+        selectors = [
+            f"#{panel_id}-commands OptionList",
+            f"#{panel_id}-commands",
+        ]
+        for selector in selectors:
+            try:
+                target = self.query_one(selector)
+                target.focus()
+                return
+            except Exception:
+                continue
 
     def _snapshot_log_lines(self, limit: int = 80) -> list[str]:
         try:
@@ -118,7 +152,7 @@ class PowerScreen(Screen):
         except Exception:
             pass
         return {
-            "source": "power",
+            "source": "manual",
             "current_panel": panel,
             "logs": self._snapshot_log_lines(),
         }
@@ -141,4 +175,4 @@ class PowerScreen(Screen):
             self.get_log().log_warning(f"Agent context saved (clipboard unavailable): {out_path}")
 
     def get_log(self) -> LogPanel:
-        return self.query_one("#power-log", LogPanel)
+        return self.query_one("#manual-log", LogPanel)

@@ -29,6 +29,8 @@ from ..commands import (
     cmd_upload,
     cmd_validate,
 )
+from ..registry import register_project
+from ..runtime import resolve_runtime_context
 from ...manifest import load_manifest
 from ..state import ProjectInfo
 from ..widgets.header import CauldronHeader
@@ -81,7 +83,7 @@ class WizardScreen(Screen):
         Binding("1", "select_workflow_deploy_existing", "Deploy Flow", show=False),
         Binding("2", "select_workflow_train_then_deploy", "Train Flow", show=False),
         Binding("c", "copy_context", "Copy Context", show=False),
-        Binding("p", "open_power", "Power", show=False),
+        Binding("m", "open_manual", "Manual", show=False),
         Binding("up", "focus_previous", "Up", show=False),
         Binding("down", "focus_next", "Down", show=False),
     ]
@@ -355,7 +357,7 @@ class WizardScreen(Screen):
                 return [
                     "[#8892a4]Train from project dataset and auto-generate weights artifacts.[/]",
                     "[#8892a4]Auto-detects: train/data/dataset (*.csv or *.npz) under project paths.[/]",
-                    "[#8892a4]If not found, use Power Mode Train panel and retry this step.[/]",
+                    "[#8892a4]If not found, use Manual Mode Train panel and retry this step.[/]",
                 ]
             return [
                 "[#8892a4]Training skipped for deploy-existing workflow.[/]",
@@ -460,7 +462,7 @@ class WizardScreen(Screen):
         if self._last_error and step_state == "failed":
             lines.append("")
             lines.append(f"[#ff3366]Last error:[/] {self._last_error}")
-            lines.append("[#8892a4]Retry with Enter, go back with Left, or press P for Power Mode.[/]")
+            lines.append("[#8892a4]Retry with Enter, go back with Left, or press M for Manual Mode.[/]")
 
         lines.append("")
         lines.extend(self._render_step_status_overview())
@@ -541,14 +543,14 @@ class WizardScreen(Screen):
             self._log("error", f"  {err}")
         for line in list(getattr(result, "logs", []))[:30]:
             self._log("error", f"  {line}")
-        self._log("warning", "Retry with Enter, go back with Left, or press P for Power Mode.")
+        self._log("warning", "Retry with Enter, go back with Left, or press M for Manual Mode.")
         return False
 
     def _fail_step(self, step: int, message: str) -> bool:
         self._last_error = message
         self._set_step_status(step, "failed", message)
         self._log("error", message)
-        self._log("warning", "Retry with Enter, go back with Left, or press P for Power Mode.")
+        self._log("warning", "Retry with Enter, go back with Left, or press M for Manual Mode.")
         return False
 
     def _require_project(self, step: int) -> ProjectInfo | None:
@@ -701,6 +703,7 @@ class WizardScreen(Screen):
         project = self._require_project(step)
         if project is None:
             return False
+        runtime = resolve_runtime_context(project)
 
         if step == 0:
             self._set_step_status(step, "success", f"Project ready: {project.name}")
@@ -723,7 +726,7 @@ class WizardScreen(Screen):
                 return self._fail_step(
                     step,
                     "No training data found. Add train/data/dataset (.csv or .npz) under project path, "
-                    "or use Power Mode Train panel, then retry.",
+                    "or use Manual Mode Train panel, then retry.",
                 )
 
             task = self._default_training_task()
@@ -757,17 +760,36 @@ class WizardScreen(Screen):
 
         if step == 5:
             self._log("info", "Generating accounts config...")
-            init_result = await asyncio.to_thread(cmd_accounts_init, project.manifest_path)
+            init_result = await asyncio.to_thread(
+                cmd_accounts_init,
+                project.manifest_path,
+                rpc_url=runtime.rpc_url,
+                program_id=runtime.program_id,
+                payer=runtime.payer,
+                project_path=project.path,
+            )
             if not self._record_result(step, init_result):
                 return False
             accounts_path = init_result.data.get("path")
             if not isinstance(accounts_path, str):
                 return self._fail_step(step, "Accounts init did not return an accounts file path")
             project.accounts_path = Path(accounts_path)
+            project.cluster = runtime.cluster
+            project.rpc_url = runtime.rpc_url
+            project.program_id = runtime.program_id
+            project.payer = runtime.payer
+            register_project(project)
             self._append_step_note(step, f"Accounts file: {project.accounts_path}")
 
             self._log("info", "Creating PDA accounts on-chain...")
-            create_result = await asyncio.to_thread(cmd_accounts_create, project.accounts_path)
+            create_result = await asyncio.to_thread(
+                cmd_accounts_create,
+                project.accounts_path,
+                rpc_url=runtime.rpc_url,
+                program_id=runtime.program_id,
+                payer=runtime.payer,
+                project_path=project.path,
+            )
             if not self._record_result(step, create_result):
                 return False
             return True
@@ -790,6 +812,9 @@ class WizardScreen(Screen):
                     cmd_upload,
                     file_path=chunk_path,
                     accounts_path=accounts_path,
+                    rpc_url=runtime.rpc_url,
+                    payer=runtime.payer,
+                    program_id=runtime.program_id,
                 )
                 if not bool(getattr(upload_result, "success", False)):
                     return self._record_result(step, upload_result)
@@ -812,6 +837,9 @@ class WizardScreen(Screen):
                 accounts_path,
                 data_path=data_path,
                 input_bin=input_bin,
+                rpc_url=runtime.rpc_url,
+                payer=runtime.payer,
+                program_id=runtime.program_id,
             )
             return self._record_result(step, write_result)
 
@@ -828,6 +856,9 @@ class WizardScreen(Screen):
                 cmd_program_load,
                 program_path=guest_elf,
                 accounts_path=accounts_path,
+                rpc_url=runtime.rpc_url,
+                payer=runtime.payer,
+                program_id=runtime.program_id,
             )
             return self._record_result(step, load_result)
 
@@ -843,6 +874,9 @@ class WizardScreen(Screen):
                 mode="resume",
                 instructions=instructions,
                 max_tx=max_tx,
+                rpc_url=runtime.rpc_url,
+                payer=runtime.payer,
+                program_id=runtime.program_id,
             )
             if not bool(getattr(invoke_result, "success", False)):
                 self._log("warning", "Resume invoke failed; retrying in fresh mode.")
@@ -852,6 +886,9 @@ class WizardScreen(Screen):
                     mode="fresh",
                     instructions=instructions,
                     max_tx=max_tx,
+                    rpc_url=runtime.rpc_url,
+                    payer=runtime.payer,
+                    program_id=runtime.program_id,
                 )
             if not self._record_result(step, invoke_result):
                 return False
@@ -870,6 +907,7 @@ class WizardScreen(Screen):
                 cmd_output,
                 manifest_path=project.manifest_path,
                 accounts_path=accounts_path,
+                rpc_url=runtime.rpc_url,
                 after_signature=self._invoke_signature,
             )
             if not self._record_result(step, output_result):
@@ -968,11 +1006,11 @@ class WizardScreen(Screen):
             self._log("warning", f"Agent context saved (clipboard unavailable): {out_path}")
         self._render_step()
 
-    def action_open_power(self) -> None:
-        from .power import PowerScreen
+    def action_open_manual(self) -> None:
+        from .manual import ManualScreen
 
         self.app.pop_screen()
-        self.app.push_screen(PowerScreen())
+        self.app.push_screen(ManualScreen())
 
     def action_go_home(self) -> None:
         if hasattr(self.app, "action_home"):

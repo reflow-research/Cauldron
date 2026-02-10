@@ -1,8 +1,9 @@
-"""Sidebar — navigation rail for power-user mode."""
+"""Sidebar — navigation rail for manual mode."""
 
 from __future__ import annotations
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Vertical
 from textual.message import Message
 from textual.reactive import reactive
@@ -10,12 +11,14 @@ from textual.widget import Widget
 from textual.widgets import Static
 
 
+_PANEL_ORDER = ("models", "train", "weights", "accounts", "invoke")
+
 _ICONS = {
     "models": "[#00ffcc]>[/]",
+    "train": "[#ff3366]>[/]",
     "weights": "[#ff00aa]>[/]",
     "accounts": "[#39ff14]>[/]",
     "invoke": "[#ffaa00]>[/]",
-    "train": "[#ff3366]>[/]",
 }
 
 
@@ -72,7 +75,7 @@ class NavItem(Widget, can_focus=True):
 
 
 class Sidebar(Widget):
-    """Left navigation rail for the power-user screen."""
+    """Left navigation rail for the manual screen."""
 
     DEFAULT_CSS = """
     Sidebar {
@@ -83,6 +86,13 @@ class Sidebar(Widget):
         padding: 1 0;
     }
     """
+
+    BINDINGS = [
+        Binding("up", "nav_prev", "Prev", show=False, priority=True),
+        Binding("down", "nav_next", "Next", show=False, priority=True),
+        Binding("tab", "nav_next", "Next", show=False, priority=True),
+        Binding("shift+tab", "nav_prev", "Prev", show=False, priority=True),
+    ]
 
     active_panel: reactive[str] = reactive("models")
 
@@ -96,10 +106,10 @@ class Sidebar(Widget):
             yield Static("[#8892a4 bold] NAVIGATE[/]", classes="nav-title")
             yield Static("")
             yield NavItem("Models", "models", "1", id="nav-models")
-            yield NavItem("Weights", "weights", "2", id="nav-weights")
-            yield NavItem("Accounts", "accounts", "3", id="nav-accounts")
-            yield NavItem("Invoke", "invoke", "4", id="nav-invoke")
-            yield NavItem("Train", "train", "5", id="nav-train")
+            yield NavItem("Train", "train", "2", id="nav-train")
+            yield NavItem("Weights", "weights", "3", id="nav-weights")
+            yield NavItem("Accounts", "accounts", "4", id="nav-accounts")
+            yield NavItem("Invoke", "invoke", "5", id="nav-invoke")
             yield Static("")
             yield Static(
                 "[#1a3a4a]────────────────────────[/]",
@@ -112,6 +122,7 @@ class Sidebar(Widget):
 
     def on_mount(self) -> None:
         self._highlight(self.active_panel)
+        self.call_after_refresh(self.focus_active_item)
 
     def on_nav_item_activated(self, event: NavItem.Activated) -> None:
         self.active_panel = event.key
@@ -121,7 +132,7 @@ class Sidebar(Widget):
         self._highlight(value)
 
     def _highlight(self, active_id: str) -> None:
-        for key in ("models", "weights", "accounts", "invoke", "train"):
+        for key in _PANEL_ORDER:
             try:
                 item = self.query_one(f"#nav-{key}", NavItem)
                 item.remove_class("-active")
@@ -129,3 +140,37 @@ class Sidebar(Widget):
                     item.add_class("-active")
             except Exception:
                 pass
+
+    def action_nav_next(self) -> None:
+        self._focus_relative(1)
+
+    def action_nav_prev(self) -> None:
+        self._focus_relative(-1)
+
+    def focus_active_item(self) -> None:
+        self._focus_item(self.active_panel)
+
+    def _focus_relative(self, delta: int) -> None:
+        current = self._focused_item_key() or self.active_panel
+        try:
+            idx = _PANEL_ORDER.index(current)
+        except ValueError:
+            idx = 0
+        next_idx = (idx + delta) % len(_PANEL_ORDER)
+        self._focus_item(_PANEL_ORDER[next_idx])
+
+    def _focused_item_key(self) -> str | None:
+        for key in _PANEL_ORDER:
+            try:
+                item = self.query_one(f"#nav-{key}", NavItem)
+            except Exception:
+                continue
+            if item.has_focus:
+                return key
+        return None
+
+    def _focus_item(self, key: str) -> None:
+        try:
+            self.query_one(f"#nav-{key}", NavItem).focus()
+        except Exception:
+            pass

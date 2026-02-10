@@ -9,6 +9,7 @@ from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
 
 from .state import AppState
+from .runtime import resolve_runtime_context
 
 
 class CauldronCommandProvider(Provider):
@@ -248,10 +249,12 @@ class CauldronApp(App):
             self.notify("No accounts file found", severity="warning")
             return
         from .commands import cmd_output
+        runtime = resolve_runtime_context(proj)
 
         result = cmd_output(
             manifest_path=proj.manifest_path,
             accounts_path=proj.accounts_path,
+            rpc_url=runtime.rpc_url,
         )
         self.notify(result.message, severity="information" if result.success else "error")
 
@@ -261,8 +264,15 @@ class CauldronApp(App):
             self.notify("No active project", severity="warning")
             return
         from .commands import cmd_accounts_init
+        runtime = resolve_runtime_context(proj)
 
-        result = cmd_accounts_init(manifest_path=proj.manifest_path)
+        result = cmd_accounts_init(
+            manifest_path=proj.manifest_path,
+            rpc_url=runtime.rpc_url,
+            program_id=runtime.program_id,
+            payer=runtime.payer,
+            project_path=proj.path,
+        )
         self.notify(result.message, severity="information" if result.success else "error")
 
     def action_wizard(self) -> None:

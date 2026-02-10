@@ -37,7 +37,7 @@ Screen {
 }
 
 /* ── Sidebar ────────────────────────────────────────────── */
-#sidebar, #power-sidebar {
+#sidebar, #manual-sidebar {
     dock: left;
     width: 26;
     background: #111827;
@@ -75,12 +75,12 @@ Screen {
     border-left: outer #00ffcc;
 }
 
-/* ── Power Screen Layout ───────────────────────────────── */
-#power-layout {
+/* ── Manual Screen Layout ──────────────────────────────── */
+#manual-layout {
     height: 1fr;
 }
 
-#power-content {
+#manual-content {
     width: 1fr;
 }
 
@@ -94,7 +94,7 @@ Screen {
     margin: 0 1;
 }
 
-#power-log {
+#manual-log {
     min-height: 5;
     max-height: 12;
     margin: 0 1 0 1;
@@ -139,6 +139,59 @@ Screen {
     color: #00ffcc;
     text-style: bold;
     margin-bottom: 1;
+}
+
+InvokePanel #invoke-shell {
+    padding: 0 2;
+}
+
+InvokePanel #invoke-shell .panel-title {
+    margin-bottom: 0;
+}
+
+InvokePanel #invoke-commands {
+    height: 6;
+    min-height: 6;
+}
+
+InvokePanel #invoke-commands.-compact {
+    display: none;
+}
+
+ModelsPanel #models-commands {
+    height: 6;
+    min-height: 6;
+}
+
+ModelsPanel #models-commands.-compact {
+    display: none;
+}
+
+AccountsPanel #accounts-commands {
+    height: 6;
+    min-height: 6;
+}
+
+AccountsPanel #accounts-commands.-compact {
+    display: none;
+}
+
+WeightsPanel #weights-commands {
+    height: 6;
+    min-height: 6;
+}
+
+WeightsPanel #weights-commands.-compact {
+    display: none;
+}
+
+TrainPanel #train-commands {
+    height: 3;
+    min-height: 3;
+}
+
+TrainPanel #train-commands.-compact {
+    display: none;
 }
 
 .panel-section {
@@ -497,11 +550,17 @@ ScrollBar > .scrollbar--bar:hover {
     padding: 0 1;
 }
 
+#home-divider {
+    width: 100%;
+    height: 1;
+    text-align: center;
+    background: #111827;
+}
+
 #home-actions {
     height: auto;
     padding: 1 2;
     background: #111827;
-    border-top: solid #1a3a4a;
 }
 
 /* ── Mode Selector (Home) ───────────────────────────────── */
@@ -517,7 +576,7 @@ ScrollBar > .scrollbar--bar:hover {
     border: tall #00ffcc;
 }
 
-.mode-btn.-power {
+.mode-btn.-manual {
     background: #2a0040;
     color: #ff00aa;
     border: tall #ff00aa;
@@ -527,7 +586,7 @@ ScrollBar > .scrollbar--bar:hover {
     background: #005544;
 }
 
-.mode-btn.-power:hover {
+.mode-btn.-manual:hover {
     background: #3d0055;
 }
 

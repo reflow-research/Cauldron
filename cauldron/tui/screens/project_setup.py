@@ -12,6 +12,7 @@ from textual.widgets import Button, Checkbox, Footer, Input, Select, Static
 
 from ..commands import TEMPLATES, cmd_init
 from ..registry import register_project
+from ..runtime import resolve_runtime_context
 from ..state import ProjectInfo
 from ..widgets.header import CauldronHeader
 from ..widgets.status_bar import StatusBar
@@ -119,6 +120,11 @@ class ProjectSetupScreen(Screen):
                 template=template,
                 deployment_state="init",
             )
+            runtime = resolve_runtime_context(project)
+            project.cluster = runtime.cluster
+            project.rpc_url = runtime.rpc_url
+            project.program_id = runtime.program_id
+            project.payer = runtime.payer
             register_project(project)
             self.app.app_state.set_active_project(project)  # type: ignore[attr-defined]
             self.notify(f"Created {template} project: {project_path.name}", severity="information")

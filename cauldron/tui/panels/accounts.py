@@ -10,6 +10,8 @@ from textual.widget import Widget
 from textual.widgets import Button, Input, Static
 
 from ..commands import cmd_accounts_show, cmd_accounts_init, cmd_accounts_create, cmd_accounts_close_vm
+from ..registry import register_project
+from ..runtime import resolve_runtime_context
 from ..widgets.command_list import CommandItem, CommandList
 
 
@@ -72,12 +74,15 @@ class AccountsPanel(Widget):
             return
 
         if event.key == "show":
+            self._hide_init_form()
             self._run_show(proj)
         elif event.key == "init":
             self._show_init_form()
         elif event.key == "create":
+            self._hide_init_form()
             self._run_create(proj)
         elif event.key == "close-vm":
+            self._hide_init_form()
             self._run_close_vm(proj)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -86,15 +91,41 @@ class AccountsPanel(Widget):
         elif event.button.id == "btn-accounts-init-cancel":
             self._hide_init_form()
 
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        input_id = event.input.id or ""
+        if input_id == "accounts-ram-count":
+            self._focus_field("#accounts-ram-bytes")
+        elif input_id == "accounts-ram-bytes":
+            self._run_init()
+
     def _show_init_form(self) -> None:
+        self._set_command_compact(True)
         try:
             self.query_one("#accounts-init-form").add_class("-visible")
+            self.call_after_refresh(self._focus_field, "#accounts-ram-count")
         except Exception:
             pass
 
     def _hide_init_form(self) -> None:
         try:
             self.query_one("#accounts-init-form").remove_class("-visible")
+        except Exception:
+            pass
+        self._set_command_compact(False)
+
+    def _focus_field(self, selector: str) -> None:
+        try:
+            self.query_one(selector, Input).focus()
+        except Exception:
+            pass
+
+    def _set_command_compact(self, compact: bool) -> None:
+        try:
+            command_list = self.query_one("#accounts-commands")
+            if compact:
+                command_list.add_class("-compact")
+            else:
+                command_list.remove_class("-compact")
         except Exception:
             pass
 
@@ -114,11 +145,16 @@ class AccountsPanel(Widget):
 
         self._show_result("[#ffaa00]Generating accounts...[/]")
         self._log_info("Initializing accounts config...")
+        runtime = resolve_runtime_context(proj)
 
         result = cmd_accounts_init(
             manifest_path=proj.manifest_path,
             ram_count=ram_count,
             ram_bytes=ram_bytes,
+            rpc_url=runtime.rpc_url,
+            program_id=runtime.program_id,
+            payer=runtime.payer,
+            project_path=proj.path,
         )
         if result.success:
             lines = [f"[#39ff14]{result.message}[/]"]
@@ -130,6 +166,11 @@ class AccountsPanel(Widget):
                 lines.append(f"  [#8892a4]file:[/] {path}")
                 # Update project accounts path
                 proj.accounts_path = Path(path)
+            proj.cluster = runtime.cluster
+            proj.rpc_url = runtime.rpc_url
+            proj.program_id = runtime.program_id
+            proj.payer = runtime.payer
+            register_project(proj)
             self._show_result("\n".join(lines))
             self._log_success(result.message)
             self._hide_init_form()
@@ -167,8 +208,15 @@ class AccountsPanel(Widget):
 
         self._show_result("[#ffaa00]Creating accounts on-chain...[/]")
         self._log_info("Creating PDA accounts...")
+        runtime = resolve_runtime_context(proj)
 
-        result = cmd_accounts_create(accounts_path=proj.accounts_path)
+        result = cmd_accounts_create(
+            accounts_path=proj.accounts_path,
+            rpc_url=runtime.rpc_url,
+            program_id=runtime.program_id,
+            payer=runtime.payer,
+            project_path=proj.path,
+        )
         if result.success:
             lines = [f"[#39ff14]{result.message}[/]"]
             for log_line in result.logs:
@@ -189,8 +237,14 @@ class AccountsPanel(Widget):
 
         self._show_result("[#ffaa00]Closing VM...[/]")
         self._log_info("Closing VM PDA...")
+        runtime = resolve_runtime_context(proj)
 
-        result = cmd_accounts_close_vm(accounts_path=proj.accounts_path)
+        result = cmd_accounts_close_vm(
+            accounts_path=proj.accounts_path,
+            rpc_url=runtime.rpc_url,
+            program_id=runtime.program_id,
+            payer=runtime.payer,
+        )
         if result.success:
             lines = [f"[#39ff14]{result.message}[/]"]
             for log_line in result.logs:
@@ -212,9 +266,9 @@ class AccountsPanel(Widget):
 
     def _get_log(self):
         try:
-            from ..screens.power import PowerScreen
+            from ..screens.manual import ManualScreen
             screen = self.screen
-            if isinstance(screen, PowerScreen):
+            if isinstance(screen, ManualScreen):
                 return screen.get_log()
         except Exception:
             pass
