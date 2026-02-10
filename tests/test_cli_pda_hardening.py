@@ -11,6 +11,7 @@ from cauldron.accounts import Segment
 from cauldron.cli import (
     _accounts_segment_metas,
     _apply_accounts_env,
+    _cmd_accounts_create_pda,
     _cmd_accounts_clear,
     _cmd_accounts_close_segment,
     _cmd_accounts_close_vm,
@@ -134,6 +135,43 @@ class CliPdaHardeningTests(unittest.TestCase):
             self.assertIn("seed = 42", text)
             self.assertIn("entry = 0x4000", text)
             self.assertNotIn("pubkey = \"REPLACE_ME\"", text)
+
+    def test_accounts_init_manifest_without_weights_sets_zero_length_slot1(self) -> None:
+        args = self._make_accounts_init_args()
+        with tempfile.TemporaryDirectory() as td:
+            manifest_path = Path(td) / "frostbite-model.toml"
+            out_path = Path(td) / "frostbite-accounts.toml"
+            manifest_path.write_text(
+                "\n".join(
+                    [
+                        "[model]",
+                        'id = "custom-model"',
+                        "",
+                        "[abi]",
+                        "entry = 0x4000",
+                        "",
+                        "[schema]",
+                        'type = "custom"',
+                        "",
+                        "[schema.custom]",
+                        "input_blob_size = 16",
+                        "output_blob_size = 16",
+                        "alignment = 8",
+                        'layout_doc = "layout.md"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            args.manifest = str(manifest_path)
+            args.out = str(out_path)
+            with patch("cauldron.cli._load_solana_cli_config", return_value={}), patch(
+                "cauldron.cli.secrets.randbits", return_value=42
+            ):
+                rc = _cmd_accounts_init(args)
+            self.assertEqual(rc, 0)
+            text = out_path.read_text(encoding="utf-8")
+            self.assertIn("kind = \"weights\"", text)
+            self.assertIn("bytes = 0", text)
 
     def test_accounts_init_legacy_override_uses_placeholder_accounts(self) -> None:
         args = self._make_accounts_init_args(legacy_accounts=True, ram_count=1)
@@ -863,6 +901,52 @@ class CliPdaHardeningTests(unittest.TestCase):
             self.assertIn("0x4000", cmd)
             self.assertNotIn("--resume", cmd)
 
+    def test_accounts_create_pda_includes_zero_length_weights_segment(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            mapped_out = Path(td) / "mapped_accounts.txt"
+            args = argparse.Namespace(
+                mapped_out=str(mapped_out),
+                ram_bytes=None,
+                rpc_url=None,
+                payer=None,
+                program_id=None,
+            )
+            info = {
+                "rpc_url": "https://api.devnet.solana.com",
+                "program_id": "FRsToriMLgDc1Ud53ngzHUZvCRoazCaGeGUuzkwoha7m",
+                "payer": "/tmp/payer.json",
+            }
+            mapped_lines = [
+                "ro:Weight111111111111111111111111111111111111",
+                "rw:Ram111111111111111111111111111111111111111",
+            ]
+            segments = [
+                Segment(index=1, slot=1, kind="weights", pubkey=None, keypair=None, writable=False, bytes=0),
+                Segment(index=2, slot=2, kind="ram", pubkey=None, keypair=None, writable=True, bytes=64),
+            ]
+            with patch("cauldron.cli.load_accounts", return_value={"vm": {}}), patch(
+                "cauldron.cli.parse_segments", return_value=segments
+            ), patch(
+                "cauldron.cli.resolve_authority_pubkey",
+                return_value="Auth111111111111111111111111111111111111",
+            ), patch(
+                "cauldron.cli.resolve_pubkey",
+                return_value="Auth111111111111111111111111111111111111",
+            ), patch("cauldron.cli.subprocess.run", return_value=Mock(returncode=0)) as run_mock:
+                rc = _cmd_accounts_create_pda(
+                    args,
+                    "/tmp/project/frostbite-accounts.toml",
+                    info,
+                    mapped_lines,
+                    vm_seed=7,
+                )
+
+            self.assertEqual(rc, 0)
+            cmd = run_mock.call_args.kwargs["args"] if "args" in run_mock.call_args.kwargs else run_mock.call_args[0][0]
+            self.assertIn("--segment", cmd)
+            self.assertIn("weights:1:0", cmd)
+            self.assertIn("ram:2:64", cmd)
+
     def test_invoke_seeded_resume_adds_resume_flag(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             mapped_out = Path(td) / "mapped_accounts.txt"
@@ -908,6 +992,138 @@ class CliPdaHardeningTests(unittest.TestCase):
             cmd = run_mock.call_args.kwargs["args"] if "args" in run_mock.call_args.kwargs else run_mock.call_args[0][0]
             self.assertIn("--resume", cmd)
             self.assertNotIn("--entry-pc", cmd)
+
+    def test_invoke_seeded_fresh_multi_tx_restarts_once_then_resumes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            mapped_out = Path(td) / "mapped_accounts.txt"
+            args = argparse.Namespace(
+                accounts="/tmp/project/frostbite-accounts.toml",
+                program_path=None,
+                rpc_url=None,
+                program_id=None,
+                payer=None,
+                instructions=10000,
+                ram_count=None,
+                ram_bytes=None,
+                compute_limit=None,
+                max_tx=5,
+                mapped_out=str(mapped_out),
+                mode="fresh",
+                entry_pc=None,
+                fast=False,
+                no_simulate=False,
+                verbose=False,
+            )
+            with patch(
+                "cauldron.cli._accounts_segment_metas",
+                return_value=(
+                    {
+                        "vm_pubkey": "Vm11111111111111111111111111111111111111111",
+                        "vm_seed": "7",
+                        "vm_entry": "0x4000",
+                        "rpc_url": "https://api.devnet.solana.com",
+                        "program_id": "FRsToriMLgDc1Ud53ngzHUZvCRoazCaGeGUuzkwoha7m",
+                        "payer": "/tmp/payer.json",
+                    },
+                    ["ro:Weight111111111111111111111111111111111111"],
+                ),
+            ), patch(
+                "cauldron.cli._resolve_run_onchain", return_value="/tmp/frostbite-run-onchain"
+            ), patch("cauldron.cli.load_accounts", return_value={}), patch(
+                "cauldron.cli.subprocess.run",
+                side_effect=[
+                    Mock(
+                        returncode=1,
+                        stdout="Halted: false\nReached maximum transactions (1)\nProgram did not halt\n",
+                        stderr="",
+                    ),
+                    Mock(returncode=0),
+                ],
+            ) as run_mock:
+                rc = _cmd_invoke(args)
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(run_mock.call_count, 2)
+            first_call = run_mock.call_args_list[0]
+            second_call = run_mock.call_args_list[1]
+            first_cmd = first_call.kwargs["args"] if "args" in first_call.kwargs else first_call.args[0]
+            second_cmd = second_call.kwargs["args"] if "args" in second_call.kwargs else second_call.args[0]
+
+            self.assertIn("--entry-pc", first_cmd)
+            self.assertNotIn("--resume", first_cmd)
+            first_max_tx_idx = first_cmd.index("--max-tx")
+            self.assertEqual(first_cmd[first_max_tx_idx + 1], "1")
+            self.assertTrue(first_call.kwargs.get("capture_output"))
+            self.assertTrue(first_call.kwargs.get("text"))
+
+            self.assertIn("--resume", second_cmd)
+            self.assertNotIn("--entry-pc", second_cmd)
+            second_max_tx_idx = second_cmd.index("--max-tx")
+            self.assertEqual(second_cmd[second_max_tx_idx + 1], "4")
+            self.assertFalse(second_call.kwargs.get("capture_output", False))
+
+    def test_invoke_sig_out_prefers_last_signature_after_resume_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            mapped_out = Path(td) / "mapped_accounts.txt"
+            sig_out = Path(td) / "last.sig"
+            args = argparse.Namespace(
+                accounts="/tmp/project/frostbite-accounts.toml",
+                program_path=None,
+                rpc_url=None,
+                program_id=None,
+                payer=None,
+                instructions=10000,
+                ram_count=None,
+                ram_bytes=None,
+                compute_limit=None,
+                max_tx=3,
+                mapped_out=str(mapped_out),
+                mode="fresh",
+                entry_pc=None,
+                sig_out=str(sig_out),
+                fast=False,
+                no_simulate=False,
+                verbose=False,
+            )
+            first_sig = "2XFpn6QCBrmjY8wYTQcr9sQ8zs4h1utBpr4xdB3zQhXQGTN2MZ2JgKySUxD5RQEF9xTL4m3efpZ1QzGfRw2VKnM8"
+            second_sig = "3fp2d4WCUPt9GP2Q32NV5kfb5kPHcuWr2Lsd6fXnKoApj6GnmK4a3Yh1k96QebEMM9fL7s8Q4Y1h4LPVCCdCpM7A"
+            with patch(
+                "cauldron.cli._accounts_segment_metas",
+                return_value=(
+                    {
+                        "vm_pubkey": "Vm11111111111111111111111111111111111111111",
+                        "vm_seed": "7",
+                        "vm_entry": "0x4000",
+                        "rpc_url": "https://api.devnet.solana.com",
+                        "program_id": "FRsToriMLgDc1Ud53ngzHUZvCRoazCaGeGUuzkwoha7m",
+                        "payer": "/tmp/payer.json",
+                    },
+                    ["ro:Weight111111111111111111111111111111111111"],
+                ),
+            ), patch(
+                "cauldron.cli._resolve_run_onchain", return_value="/tmp/frostbite-run-onchain"
+            ), patch("cauldron.cli.load_accounts", return_value={}), patch(
+                "cauldron.cli.subprocess.run",
+                side_effect=[
+                    Mock(
+                        returncode=1,
+                        stdout=(
+                            f"TX exec-1 sig: {first_sig}\n"
+                            "Halted: false\nReached maximum transactions (1)\nProgram did not halt\n"
+                        ),
+                        stderr="",
+                    ),
+                    Mock(returncode=0, stdout=f"TX exec-1 sig: {second_sig}\nHalted: true\n", stderr=""),
+                ],
+            ) as run_mock:
+                rc = _cmd_invoke(args)
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(run_mock.call_count, 2)
+            self.assertEqual(sig_out.read_text().strip(), second_sig)
+            second_call = run_mock.call_args_list[1]
+            self.assertTrue(second_call.kwargs.get("capture_output"))
+            self.assertTrue(second_call.kwargs.get("text"))
 
     def test_invoke_seeded_fresh_requires_entry_without_program_path(self) -> None:
         with tempfile.TemporaryDirectory() as td:

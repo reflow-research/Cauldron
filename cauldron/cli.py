@@ -1885,12 +1885,16 @@ def _cmd_accounts_init(args: argparse.Namespace) -> int:
         "payer": args.payer or cfg.get("keypair_path"),
     }
 
+    manifest_cfg: dict[str, object] | None = None
     entry_pc: int | None = args.entry_pc
-    if entry_pc is None and args.manifest:
-        manifest = load_manifest(args.manifest)
-        abi = manifest.get("abi") if isinstance(manifest, dict) else None
-        if isinstance(abi, dict) and isinstance(abi.get("entry"), int):
-            entry_pc = int(abi["entry"])
+    if args.manifest:
+        loaded = load_manifest(args.manifest)
+        if isinstance(loaded, dict):
+            manifest_cfg = loaded
+        if entry_pc is None and manifest_cfg is not None:
+            abi = manifest_cfg.get("abi")
+            if isinstance(abi, dict) and isinstance(abi.get("entry"), int):
+                entry_pc = int(abi["entry"])
     if pda_mode and entry_pc is None:
         entry_pc = 0x4000
     if entry_pc is not None and (entry_pc < 0 or entry_pc > 0xFFFF_FFFF):
@@ -1922,6 +1926,11 @@ def _cmd_accounts_init(args: argparse.Namespace) -> int:
         "kind": "weights",
         "writable": False,
     }
+    # Models without a weights table (for example `custom`) still need
+    # seeded slot-1 initialized for execute mapping validation.
+    has_weights_table = isinstance(manifest_cfg.get("weights"), dict) if manifest_cfg is not None else False
+    if pda_mode and manifest_cfg is not None and not has_weights_table:
+        weights_entry["bytes"] = 0
     if args.weights:
         weights_entry["pubkey"] = args.weights
     elif args.weights_keypair:
@@ -2146,7 +2155,7 @@ def _cmd_accounts_create_pda(
             payload_bytes = seg.bytes if isinstance(seg.bytes, int) and seg.bytes > 0 else default_ram_bytes
             segment_specs.append(f"ram:{seg.slot}:{payload_bytes}")
             continue
-        if kind == "weights" and isinstance(seg.bytes, int) and seg.bytes > 0:
+        if kind == "weights" and isinstance(seg.bytes, int) and seg.bytes >= 0:
             segment_specs.append(f"weights:{seg.slot}:{seg.bytes}")
 
     env = os.environ.copy()
@@ -2392,6 +2401,29 @@ def _extract_last_execute_signature(output: str) -> str | None:
     return _h.extract_last_execute_signature(output)
 
 
+def _extract_halted_status(output: str) -> bool | None:
+    return _h.extract_halted_status(output)
+
+
+def _run_invoke_runner(
+    cmd: list[str],
+    *,
+    env: dict[str, str],
+    capture_output: bool,
+) -> tuple[subprocess.CompletedProcess, str | None]:
+    if capture_output:
+        proc = subprocess.run(cmd, env=env, text=True, capture_output=True)
+        stdout_text = proc.stdout if isinstance(proc.stdout, str) else ""
+        stderr_text = proc.stderr if isinstance(proc.stderr, str) else ""
+        if stdout_text:
+            print(stdout_text, end="")
+        if stderr_text:
+            print(stderr_text, end="", file=sys.stderr)
+        return proc, stdout_text + "\n" + stderr_text
+    proc = subprocess.run(cmd, env=env)
+    return proc, None
+
+
 def _cmd_invoke(args: argparse.Namespace) -> int:
     mode = getattr(args, "mode", "fresh")
     entry_pc_arg = getattr(args, "entry_pc", None)
@@ -2458,10 +2490,11 @@ def _cmd_invoke(args: argparse.Namespace) -> int:
 
     run_onchain = _resolve_run_onchain()
     payer_keypair = args.payer or (info.get("payer") if isinstance(info.get("payer"), str) else None)
-    cmd = [run_onchain]
+    requested_max_tx = args.max_tx
+    base_cmd = [run_onchain]
     if args.program_path:
-        cmd.extend([args.program_path, "--load"])
-    cmd.extend(
+        base_cmd.extend([args.program_path, "--load"])
+    base_cmd.extend(
         [
             "--vm",
             vm_pubkey,
@@ -2471,57 +2504,105 @@ def _cmd_invoke(args: argparse.Namespace) -> int:
             str(args.instructions),
         ]
     )
-    _append_seeded_runner_args(cmd, args.accounts, info, payer_keypair=payer_keypair)
-    if seeded_mode:
-        if mode == "resume":
-            cmd.append("--resume")
-        elif entry_pc_value is not None:
-            cmd.extend(["--entry-pc", hex(entry_pc_value)])
+    _append_seeded_runner_args(base_cmd, args.accounts, info, payer_keypair=payer_keypair)
     if args.ram_count is not None:
-        cmd.extend(["--ram-count", str(args.ram_count)])
+        base_cmd.extend(["--ram-count", str(args.ram_count)])
     elif has_writable_mapped_segments:
-        cmd.extend(["--ram-count", "0"])
+        base_cmd.extend(["--ram-count", "0"])
     if args.ram_bytes is not None:
-        cmd.extend(["--ram-bytes", str(args.ram_bytes)])
+        base_cmd.extend(["--ram-bytes", str(args.ram_bytes)])
     if args.compute_limit is not None:
-        cmd.extend(["--compute-limit", str(args.compute_limit)])
-    if args.max_tx is not None:
-        cmd.extend(["--max-tx", str(args.max_tx)])
+        base_cmd.extend(["--compute-limit", str(args.compute_limit)])
     if args.rpc_url:
-        cmd.extend(["--rpc", args.rpc_url])
+        base_cmd.extend(["--rpc", args.rpc_url])
     elif info.get("rpc_url"):
-        cmd.extend(["--rpc", info["rpc_url"]])
+        base_cmd.extend(["--rpc", info["rpc_url"]])
     if payer_keypair:
-        cmd.extend(["--keypair", payer_keypair])
+        base_cmd.extend(["--keypair", payer_keypair])
     if args.program_id:
-        cmd.extend(["--program-id", args.program_id])
+        base_cmd.extend(["--program-id", args.program_id])
     elif info.get("program_id"):
-        cmd.extend(["--program-id", info["program_id"]])
+        base_cmd.extend(["--program-id", info["program_id"]])
     else:
-        cmd.extend(["--program-id", DEFAULT_PROGRAM_ID])
+        base_cmd.extend(["--program-id", DEFAULT_PROGRAM_ID])
     if args.no_simulate:
-        cmd.append("--no-simulate")
+        base_cmd.append("--no-simulate")
     if args.verbose or sig_out:
-        cmd.append("--verbose")
+        base_cmd.append("--verbose")
 
-    print("Running:", " ".join(cmd))
+    def _compose_invoke_cmd(*, resume: bool, include_entry_pc: bool, max_tx: int | None) -> list[str]:
+        cmd = list(base_cmd)
+        if seeded_mode:
+            if resume:
+                cmd.append("--resume")
+            elif include_entry_pc and entry_pc_value is not None:
+                cmd.extend(["--entry-pc", hex(entry_pc_value)])
+        if max_tx is not None:
+            cmd.extend(["--max-tx", str(max_tx)])
+        return cmd
+
+    last_sig: str | None = None
+
+    def _track_last_sig(output_text: str | None) -> None:
+        nonlocal last_sig
+        if not output_text:
+            return
+        sig = _extract_last_execute_signature(output_text)
+        if sig:
+            last_sig = sig
+
+    two_phase_fresh_seeded = (
+        seeded_mode
+        and mode == "fresh"
+        and not args.program_path
+        and (requested_max_tx is not None and (requested_max_tx == 0 or requested_max_tx > 1))
+    )
+
+    if two_phase_fresh_seeded:
+        fresh_cmd = _compose_invoke_cmd(resume=False, include_entry_pc=True, max_tx=1)
+        print("Running:", " ".join(fresh_cmd))
+        proc, fresh_output = _run_invoke_runner(fresh_cmd, env=env, capture_output=True)
+        _track_last_sig(fresh_output)
+        halted = _extract_halted_status(fresh_output or "")
+        reached_tx_cap = bool(
+            fresh_output
+            and "Reached maximum transactions" in fresh_output
+            and halted is False
+        )
+        if proc.returncode == 0 or reached_tx_cap:
+            should_resume = halted is not True
+            resume_max_tx: int | None = None
+            if should_resume:
+                if requested_max_tx == 0:
+                    resume_max_tx = 0
+                elif requested_max_tx is None:
+                    resume_max_tx = None
+                elif requested_max_tx > 1:
+                    resume_max_tx = requested_max_tx - 1
+                else:
+                    should_resume = False
+            if should_resume:
+                resume_cmd = _compose_invoke_cmd(resume=True, include_entry_pc=False, max_tx=resume_max_tx)
+                print("Running:", " ".join(resume_cmd))
+                proc, resume_output = _run_invoke_runner(resume_cmd, env=env, capture_output=bool(sig_out))
+                _track_last_sig(resume_output)
+    else:
+        cmd = _compose_invoke_cmd(
+            resume=(seeded_mode and mode == "resume"),
+            include_entry_pc=(mode == "fresh"),
+            max_tx=requested_max_tx,
+        )
+        print("Running:", " ".join(cmd))
+        proc, output_text = _run_invoke_runner(cmd, env=env, capture_output=bool(sig_out))
+        _track_last_sig(output_text)
+
     if sig_out:
-        proc = subprocess.run(cmd, env=env, text=True, capture_output=True)
-        stdout_text = proc.stdout or ""
-        stderr_text = proc.stderr or ""
-        if stdout_text:
-            print(stdout_text, end="")
-        if stderr_text:
-            print(stderr_text, end="", file=sys.stderr)
-        last_sig = _extract_last_execute_signature(stdout_text + "\n" + stderr_text)
         if last_sig:
             sig_path = Path(sig_out)
             sig_path.write_text(last_sig + "\n")
             print(f"Wrote execute signature: {sig_path}")
         else:
             print("Warning: no execute signature found in runner output")
-    else:
-        proc = subprocess.run(cmd, env=env)
     return proc.returncode
 
 

@@ -28,6 +28,7 @@ from ..constants import DEFAULT_PROGRAM_ID
 from ..helpers import (
     apply_accounts_env,
     append_seeded_runner_args,
+    extract_halted_status,
     build_upload_env,
     extract_last_execute_signature,
     load_solana_cli_config,
@@ -806,12 +807,16 @@ def cmd_accounts_init(
             return CommandResult(success=False, message="ram_count must be >= 1")
 
         # Resolve entry PC from manifest if not provided
+        manifest_cfg: dict[str, Any] | None = None
         effective_entry_pc = entry_pc
-        if effective_entry_pc is None and manifest_path:
-            manifest = load_manifest(manifest_path)
-            abi = manifest.get("abi") if isinstance(manifest, dict) else None
-            if isinstance(abi, dict) and isinstance(abi.get("entry"), int):
-                effective_entry_pc = int(abi["entry"])
+        if manifest_path:
+            loaded = load_manifest(manifest_path)
+            if isinstance(loaded, dict):
+                manifest_cfg = loaded
+            if effective_entry_pc is None and manifest_cfg is not None:
+                abi = manifest_cfg.get("abi")
+                if isinstance(abi, dict) and isinstance(abi.get("entry"), int):
+                    effective_entry_pc = int(abi["entry"])
         if effective_entry_pc is None:
             effective_entry_pc = 0x4000
 
@@ -825,9 +830,17 @@ def cmd_accounts_init(
             "entry": effective_entry_pc,
             "account_model": "seeded",
         }
-        segments: list[dict] = [
-            {"index": 1, "slot": 1, "kind": "weights", "writable": False},
-        ]
+        weights_segment: dict[str, str | bool | int] = {
+            "index": 1,
+            "slot": 1,
+            "kind": "weights",
+            "writable": False,
+        }
+        has_weights_table = isinstance(manifest_cfg.get("weights"), dict) if manifest_cfg is not None else False
+        if manifest_cfg is not None and not has_weights_table:
+            weights_segment["bytes"] = 0
+
+        segments: list[dict] = [weights_segment]
         for i in range(ram_count):
             seg: dict[str, str | bool | int] = {
                 "index": i + 2,
@@ -987,7 +1000,7 @@ def cmd_accounts_create(
                 payload = seg.bytes if isinstance(seg.bytes, int) and seg.bytes > 0 else ram_bytes
                 segment_specs.append(f"ram:{seg.slot}:{payload}")
                 created_slots.add(seg.slot)
-            elif kind == "weights" and isinstance(seg.bytes, int) and seg.bytes > 0:
+            elif kind == "weights" and isinstance(seg.bytes, int) and seg.bytes >= 0:
                 segment_specs.append(f"weights:{seg.slot}:{seg.bytes}")
                 created_slots.add(seg.slot)
             elif kind == "weights":
@@ -1462,47 +1475,91 @@ def cmd_invoke(
                         message="Fresh invoke requires entry PC; set vm.entry or pass --entry-pc",
                     )
 
+        requested_max_tx = max_tx
         run_onchain = resolve_run_onchain()
-        cmd = [run_onchain]
+        base_cmd = [run_onchain]
         if program_path:
-            cmd.extend([str(program_path), "--load"])
-        cmd.extend([
+            base_cmd.extend([str(program_path), "--load"])
+        base_cmd.extend([
             "--vm", vm_pubkey,
             "--mapped-file", str(mapped_path),
             "--instructions", str(instructions),
         ])
-        append_seeded_runner_args(cmd, str(accounts_path), info, payer_keypair=effective_payer)
+        append_seeded_runner_args(base_cmd, str(accounts_path), info, payer_keypair=effective_payer)
 
-        if seeded_mode:
-            if mode == "resume":
-                cmd.append("--resume")
-            elif entry_pc_value is not None:
-                cmd.extend(["--entry-pc", hex(entry_pc_value)])
         if has_writable:
-            cmd.extend(["--ram-count", "0"])
+            base_cmd.extend(["--ram-count", "0"])
         if compute_limit is not None:
-            cmd.extend(["--compute-limit", str(compute_limit)])
-        if max_tx is not None:
-            cmd.extend(["--max-tx", str(max_tx)])
+            base_cmd.extend(["--compute-limit", str(compute_limit)])
         if rpc_url or info.get("rpc_url"):
-            cmd.extend(["--rpc", rpc_url or info["rpc_url"]])
+            base_cmd.extend(["--rpc", rpc_url or info["rpc_url"]])
         if effective_payer:
-            cmd.extend(["--keypair", effective_payer])
+            base_cmd.extend(["--keypair", effective_payer])
         effective_pid = pid or DEFAULT_PROGRAM_ID
-        cmd.extend(["--program-id", effective_pid])
+        base_cmd.extend(["--program-id", effective_pid])
         if no_simulate:
-            cmd.append("--no-simulate")
+            base_cmd.append("--no-simulate")
         if verbose:
-            cmd.append("--verbose")
+            base_cmd.append("--verbose")
 
-        if on_progress:
-            on_progress(f"Invoking: {' '.join(cmd[:4])}...", None)
+        def _compose_invoke_cmd(*, resume: bool, include_entry_pc: bool, tx_cap: int | None) -> list[str]:
+            cmd = list(base_cmd)
+            if seeded_mode:
+                if resume:
+                    cmd.append("--resume")
+                elif include_entry_pc and entry_pc_value is not None:
+                    cmd.extend(["--entry-pc", hex(entry_pc_value)])
+            if tx_cap is not None:
+                cmd.extend(["--max-tx", str(tx_cap)])
+            return cmd
 
-        proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
-        output_text = (proc.stdout or "") + "\n" + (proc.stderr or "")
-        logs = [line for line in output_text.strip().splitlines() if line.strip()]
+        logs: list[str] = []
+        sig: str | None = None
 
-        sig = extract_last_execute_signature(output_text)
+        def _run_collect(cmd: list[str]) -> tuple[subprocess.CompletedProcess, bool | None, str]:
+            nonlocal sig
+            if on_progress:
+                on_progress(f"Invoking: {' '.join(cmd[:4])}...", None)
+            proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
+            stdout_text = proc.stdout if isinstance(proc.stdout, str) else ""
+            stderr_text = proc.stderr if isinstance(proc.stderr, str) else ""
+            output_text = stdout_text + "\n" + stderr_text
+            logs.extend([line for line in output_text.strip().splitlines() if line.strip()])
+            seen_sig = extract_last_execute_signature(output_text)
+            if seen_sig:
+                sig = seen_sig
+            return proc, extract_halted_status(output_text), output_text
+
+        two_phase_fresh_seeded = (
+            seeded_mode
+            and mode == "fresh"
+            and program_path is None
+            and (requested_max_tx is not None and (requested_max_tx == 0 or requested_max_tx > 1))
+        )
+
+        if two_phase_fresh_seeded:
+            fresh_cmd = _compose_invoke_cmd(resume=False, include_entry_pc=True, tx_cap=1)
+            proc, halted, fresh_output = _run_collect(fresh_cmd)
+            reached_tx_cap = (
+                "Reached maximum transactions" in fresh_output and halted is False
+            )
+            if (proc.returncode == 0 or reached_tx_cap) and halted is not True:
+                resume_cap: int | None = None
+                if requested_max_tx == 0:
+                    resume_cap = 0
+                elif requested_max_tx is None:
+                    resume_cap = None
+                elif requested_max_tx > 1:
+                    resume_cap = requested_max_tx - 1
+                resume_cmd = _compose_invoke_cmd(resume=True, include_entry_pc=False, tx_cap=resume_cap)
+                proc, _, _ = _run_collect(resume_cmd)
+        else:
+            invoke_cmd = _compose_invoke_cmd(
+                resume=(seeded_mode and mode == "resume"),
+                include_entry_pc=(mode == "fresh"),
+                tx_cap=requested_max_tx,
+            )
+            proc, _, _ = _run_collect(invoke_cmd)
 
         if proc.returncode == 0:
             return CommandResult(

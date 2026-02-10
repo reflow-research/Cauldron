@@ -41,6 +41,7 @@ from .constants import (
 # ── Regex ──────────────────────────────────────────────────────────
 
 EXEC_SIG_RE = re.compile(r"TX exec-\d+ sig:\s*([1-9A-HJ-NP-Za-km-z]+)")
+HALTED_STATUS_RE = re.compile(r"Halted:\s*(true|false)", re.IGNORECASE)
 
 # ── Cluster URLs ───────────────────────────────────────────────────
 
@@ -838,6 +839,15 @@ def extract_last_execute_signature(output: str) -> str | None:
     if not matches:
         return None
     return matches[-1]
+
+
+def extract_halted_status(output: str) -> bool | None:
+    matches = HALTED_STATUS_RE.findall(output)
+    if matches:
+        return matches[-1].lower() == "true"
+    if "[HALTED]" in output:
+        return True
+    return None
 
 
 # ── Upload validation ──────────────────────────────────────────────
