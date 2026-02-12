@@ -43,8 +43,17 @@ If you cloned this repo and want `cauldron` available from any directory, run:
 ./scripts/install-global.sh
 ```
 
-This installs the package with `tui,train` extras using your user site-packages
-(`--user`) unless you are already inside a virtual environment.
+This installs the package with `tui,train` extras to the selected interpreter's
+global site-packages by default. If global install is unavailable on your
+machine, the script automatically retries with `--user`.
+If the selected Python does not have `pip`, the script attempts to bootstrap it
+automatically before installing.
+
+Use `--user` to force user-site installation:
+
+```bash
+./scripts/install-global.sh --user
+```
 
 If `cauldron` is not found after install, add the reported script directory to
 your PATH, then restart your shell.
@@ -58,7 +67,13 @@ To uninstall:
 Direct pip equivalent:
 
 ```bash
-python3 -m pip install --user -e ".[tui,train]"
+python3 -m pip install -e ".[tui,train]"
+```
+
+If your distro enforces externally managed Python environments, add:
+
+```bash
+python3 -m pip install --break-system-packages -e ".[tui,train]"
 ```
 
 After install, run a quick environment check:
