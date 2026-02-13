@@ -292,7 +292,11 @@ def _extract_weights(model: Any, template: str, has_bias: bool) -> Dict[str, Any
         return [0.0] * length
 
     if template in ("linear", "softmax", "naive_bayes"):
-        out = {"w": state["weight"].tolist()}
+        w: Any = state["weight"].tolist()
+        if template == "linear" and state["weight"].shape[0] == 1:
+            if isinstance(w, list) and w and isinstance(w[0], list):
+                w = w[0]
+        out = {"w": w}
         if has_bias:
             out["b"] = bias_or_zeros("bias", state["weight"].shape[0])
         return out

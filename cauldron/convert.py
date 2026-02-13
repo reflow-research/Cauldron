@@ -252,10 +252,14 @@ def convert_linear(
 ) -> LinearResult:
     if "w" not in input_data:
         raise ValueError("Missing 'w' in input data")
-    w_data = input_data["w"]
+    w_data = _as_list(input_data["w"])
     if output_dim == 1:
-        w = _vector(w_data, input_dim, "w")
-        w = w[:]  # type: ignore[assignment]
+        if isinstance(w_data, list) and w_data and isinstance(w_data[0], list):
+            if len(w_data) != 1:
+                raise ValueError(f"w row count mismatch: {len(w_data)} != 1")
+            w = _vector(w_data[0], input_dim, "w")
+        else:
+            w = _vector(w_data, input_dim, "w")
     else:
         w = _flatten_matrix(w_data, output_dim, input_dim, "w")
 
