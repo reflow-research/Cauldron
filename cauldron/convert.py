@@ -167,6 +167,16 @@ def _flatten_conv2d(data: Any, out_ch: int, kernel: int, name: str) -> List[floa
     flat: List[float] = []
     for oc in data:
         oc = _as_list(oc)
+        # Accept torch Conv2d single-channel shape [1][kernel][kernel] by
+        # unwrapping the channel axis.
+        if (
+            isinstance(oc, list)
+            and len(oc) == 1
+            and isinstance(oc[0], list)
+            and oc[0]
+            and isinstance(oc[0][0], list)
+        ):
+            oc = oc[0]
         if isinstance(oc, list) and oc and isinstance(oc[0], list):
             if len(oc) != kernel:
                 raise ValueError(f"{name} kernel rows mismatch")

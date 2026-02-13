@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 def _require_numpy() -> Any:
@@ -343,8 +343,17 @@ def _extract_weights(model: Any, template: str, has_bias: bool) -> Dict[str, Any
             out["b2"] = bias_or_zeros("fc.bias", state["fc.weight"].shape[0])
         return out
     if template == "tiny_cnn":
+        w1: Any = state["conv.weight"].tolist()
+        if isinstance(w1, list):
+            squeezed: List[Any] = []
+            for oc in w1:
+                if isinstance(oc, list) and len(oc) == 1 and isinstance(oc[0], list):
+                    squeezed.append(oc[0])
+                else:
+                    squeezed.append(oc)
+            w1 = squeezed
         out = {
-            "w1": state["conv.weight"].tolist(),
+            "w1": w1,
             "w2": state["fc.weight"].tolist(),
         }
         if has_bias:
@@ -517,6 +526,19 @@ def _train_naive_bayes(manifest: Dict[str, Any], data: Dict[str, Any]) -> Dict[s
 
     x = np.asarray(data["x"], dtype=np.float32)
     y = np.asarray(data["y"], dtype=np.int64)
+    input_dim, output_dim = _schema_dims(manifest)
+    if x.ndim != 2:
+        raise ValueError("dataset features must be a 2D array")
+    if x.shape[1] != input_dim:
+        raise ValueError(
+            f"dataset feature count ({x.shape[1]}) does not match schema input_dim ({input_dim})"
+        )
+    classes = np.unique(y)
+    class_count = int(classes.size)
+    if class_count != output_dim:
+        raise ValueError(
+            f"naive_bayes class count ({class_count}) does not match schema output_dim ({output_dim})"
+        )
     model = MultinomialNB()
     model.fit(x, y)
     w = model.feature_log_prob_
