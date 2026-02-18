@@ -1,6 +1,6 @@
 {
   "name": "cauldron-modelkit",
-  "version": "0.2.0",
+  "version": "0.4.1",
   "description": "Frostbite Cauldron modelkit (CLI + SDK)",
   "license": "UNLICENSED",
   "scripts": {
@@ -11,7 +11,11 @@
   },
   "files": [
     "cauldron/**",
+    "!cauldron/rust_tools/target/**",
+    "!cauldron/**/__pycache__/**",
+    "!cauldron/**/*.pyc",
     "docs/**",
+    "!docs/validation/**",
     "examples/**",
     "scripts/**",
     "README.md",

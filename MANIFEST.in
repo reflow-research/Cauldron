@@ -9,7 +9,11 @@ recursive-include cauldron/toolchain/bin *
 recursive-include cauldron/templates *
 recursive-include cauldron/toolchain *
 recursive-include cauldron/rust_tools *
+prune cauldron/rust_tools/target
 
 recursive-include docs *
 recursive-include examples *
 recursive-include scripts *
+prune docs/validation
+global-exclude __pycache__
+global-exclude *.py[cod]

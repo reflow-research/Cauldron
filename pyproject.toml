@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "frostbite-modelkit"
-version = "0.2.0"
+version = "0.4.1"
 description = "Model packaging and validation tools for Frostbite"
 requires-python = ">=3.10"
 dependencies = ["tomli>=2.0.1; python_version < '3.11'"]
@@ -39,6 +39,13 @@ cauldron = [
   "templates/**",
   "templates/**/.cargo/**",
   "toolchain/**",
-  "rust_tools/**",
+  "rust_tools/Cargo.toml",
+  "rust_tools/Cargo.lock",
+  "rust_tools/src/**",
   "tui/*.tcss",
+]
+
+[tool.setuptools.exclude-package-data]
+cauldron = [
+  "rust_tools/target/**",
 ]
