@@ -11,7 +11,9 @@ const {
   ComputeBudgetProgram,
 } = require("@solana/web3.js");
 
-const MMU_VM_HEADER_SIZE = 545;
+const VM_HEADER_SIZE = 552;
+const MMU_VM_HEADER_SIZE = VM_HEADER_SIZE;
+const VM_ACCOUNT_SIZE_MIN = 262696;
 const EXECUTE_OP = 2;
 const EXECUTE_V3_OP = 43;
 const SEGMENT_KIND_WEIGHTS = 1;
@@ -288,6 +290,11 @@ async function main() {
   const accountInfo = await connection.getAccountInfo(vmKey);
   if (!accountInfo) {
     throw new Error("VM account not found");
+  }
+  if (accountInfo.data.length < VM_ACCOUNT_SIZE_MIN) {
+    throw new Error(
+      `VM account too small (${accountInfo.data.length} bytes); expected at least ${VM_ACCOUNT_SIZE_MIN}`
+    );
   }
   const scratch = accountInfo.data.slice(MMU_VM_HEADER_SIZE);
   const controlOffset = manifest.abi?.control_offset ?? 0;

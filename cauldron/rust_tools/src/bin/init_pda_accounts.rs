@@ -27,7 +27,7 @@ const SEGMENT_KIND_WEIGHTS: u8 = 1;
 const SEGMENT_KIND_RAM: u8 = 2;
 
 const VM_MEMORY_SIZE: usize = 262_144;
-const VM_MEMORY_OFFSET: usize = 545;
+const VM_MEMORY_OFFSET: usize = 552;
 const VM_ACCOUNT_SIZE: usize = VM_MEMORY_OFFSET + VM_MEMORY_SIZE;
 const SEGMENT_HEADER_SIZE: usize = 12;
 

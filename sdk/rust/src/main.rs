@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use toml::value::Table;
 
-const MMU_VM_HEADER_SIZE: usize = 545;
+const VM_HEADER_SIZE: usize = 552;
+const MMU_VM_HEADER_SIZE: usize = VM_HEADER_SIZE;
+const VM_ACCOUNT_SIZE_MIN: usize = 262_696;
 const EXECUTE_OP: u8 = 2;
 const EXECUTE_V3_OP: u8 = 43;
 const SEGMENT_KIND_WEIGHTS: u8 = 1;
@@ -526,8 +528,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.send_and_confirm_transaction(&tx)?;
 
     let account = client.get_account(&vm_pubkey)?;
-    if account.data.len() < MMU_VM_HEADER_SIZE {
-        return Err("VM account data too small".into());
+    if account.data.len() < VM_ACCOUNT_SIZE_MIN {
+        return Err(
+            format!(
+                "VM account data too small: {} < {}",
+                account.data.len(),
+                VM_ACCOUNT_SIZE_MIN
+            )
+            .into(),
+        );
     }
     let scratch = &account.data[MMU_VM_HEADER_SIZE..];
     let abi = manifest_toml

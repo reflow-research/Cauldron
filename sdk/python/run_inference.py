@@ -15,7 +15,9 @@ from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 from solders.transaction import Transaction
 
-MMU_VM_HEADER_SIZE = 545
+VM_HEADER_SIZE = 552
+MMU_VM_HEADER_SIZE = VM_HEADER_SIZE
+VM_ACCOUNT_SIZE_MIN = 262_696
 EXECUTE_OP = 2
 EXECUTE_V3_OP = 43
 SEGMENT_KIND_WEIGHTS = 1
@@ -263,6 +265,10 @@ def main() -> None:
     if info is None:
         raise SystemExit("VM account not found")
     raw = base64.b64decode(info.data[0])
+    if len(raw) < VM_ACCOUNT_SIZE_MIN:
+        raise SystemExit(
+            f"VM account too small ({len(raw)} bytes); expected at least {VM_ACCOUNT_SIZE_MIN}"
+        )
     scratch = raw[MMU_VM_HEADER_SIZE:]
     control_offset = manifest.get("abi", {}).get("control_offset", 0)
     output_offset = manifest.get("abi", {}).get("output_offset", 0)

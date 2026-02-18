@@ -1340,11 +1340,11 @@ class CliPdaHardeningTests(unittest.TestCase):
             poll_interval=0.5,
             out=None,
         )
-        vm_data = bytearray(545 + 0x2000 + 12)
+        vm_data = bytearray(552 + 0x2000 + 12)
         struct.pack_into(
             "<IIIIIIIIIIIIQ",
             vm_data,
-            545,
+            552,
             0x314D4246,
             1,
             0,
@@ -1359,7 +1359,7 @@ class CliPdaHardeningTests(unittest.TestCase):
             0,
             0,
         )
-        struct.pack_into("<iii", vm_data, 545 + 0x2000, 10, 20, 30)
+        struct.pack_into("<iii", vm_data, 552 + 0x2000, 10, 20, 30)
         manifest = {
             "abi": {
                 "control_offset": 0,

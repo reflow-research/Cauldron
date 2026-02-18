@@ -9,7 +9,9 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
-const MMU_VM_HEADER_SIZE: usize = 545;
+const VM_HEADER_SIZE: usize = 552;
+const MMU_VM_HEADER_SIZE: usize = VM_HEADER_SIZE;
+const VM_ACCOUNT_SIZE_MIN: usize = 262_696;
 const FBM1_MAGIC: u32 = 0x314D_4246;
 const ABI_VERSION: u32 = 1;
 
@@ -64,7 +66,7 @@ pub fn process_instruction(
     }
 
     let data = vm_account.try_borrow_data()?;
-    if data.len() < MMU_VM_HEADER_SIZE {
+    if data.len() < VM_ACCOUNT_SIZE_MIN {
         return Err(ProgramError::AccountDataTooSmall);
     }
     let scratch = &data[MMU_VM_HEADER_SIZE..];

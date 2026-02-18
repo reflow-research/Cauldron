@@ -4,7 +4,10 @@
   "description": "Frostbite Cauldron modelkit (CLI + SDK)",
   "license": "UNLICENSED",
   "scripts": {
-    "postinstall": "node scripts/select-runner.js --copy"
+    "postinstall": "node scripts/select-runner.js --copy",
+    "docs:build": "cd book && honkit build . site",
+    "docs:serve": "cd book && honkit serve . --port 4000",
+    "docs:serve:static": "python3 -m http.server 4000 --directory book/site"
   },
   "files": [
     "cauldron/**",
@@ -15,6 +18,9 @@
     "CAULDRON.md",
     ".env.example"
   ],
+  "devDependencies": {
+    "honkit": "^6.1.6"
+  },
   "dependencies": {
     "solders": "^0.0.1-security"
   }

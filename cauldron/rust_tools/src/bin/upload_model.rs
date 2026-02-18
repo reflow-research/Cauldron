@@ -32,7 +32,7 @@ const OP_WRITE_SEGMENT_PDA: u8 = 45;
 const SEEDED_VM_PREFIX: &str = "fbv1:vm:";
 const SEEDED_SEG_PREFIX: &str = "fbv1:sg:";
 const VM_MEMORY_SIZE: usize = 262_144;
-const VM_MEMORY_OFFSET: usize = 545;
+const VM_MEMORY_OFFSET: usize = 552;
 const VM_ACCOUNT_SIZE: usize = VM_MEMORY_OFFSET + VM_MEMORY_SIZE;
 
 const SEGMENT_KIND_WEIGHTS: u8 = 1;

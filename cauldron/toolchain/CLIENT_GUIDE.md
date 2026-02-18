@@ -168,13 +168,16 @@ The VM account data layout:
 
 ```rust
 // State offsets (from frostbite::vm::offsets)
-pub const MAGIC: usize = 0;           // 4 bytes: "FBVM"
-pub const REGISTERS: usize = 4;       // 256 bytes: x0-x31 (8 bytes each)
-pub const PC: usize = 260;            // 8 bytes: Program Counter
-pub const HALTED: usize = 268;        // 1 byte: Halted flag
-pub const EXIT_CODE: usize = 269;     // 8 bytes: Exit code
-pub const INSTR_COUNT: usize = 277;   // 8 bytes: Instructions executed
-pub const MEMORY: usize = 285;        // Rest: VM memory (256KB)
+pub const MAGIC: usize = 0;           // 4 bytes: "RVVM"
+pub const FCSR: usize = 4;            // 4 bytes
+pub const REGISTERS: usize = 8;       // 256 bytes: x0-x31 (8 bytes each)
+pub const FREGISTERS: usize = 264;    // 256 bytes: f0-f31 (8 bytes each)
+pub const PC: usize = 520;            // 8 bytes: Program Counter
+pub const INSTR_COUNT: usize = 528;   // 8 bytes: Instructions executed
+pub const HALTED: usize = 536;        // 1 byte: Halted flag
+pub const EXEC_HINTS: usize = 537;    // 1 byte: execution hints
+pub const EXIT_CODE: usize = 544;     // 8 bytes: Exit code
+pub const MEMORY: usize = 552;        // Rest: VM memory (256KB)
 
 // Helper function
 fn read_u64(data: &[u8], offset: usize) -> u64 {
